@@ -1,0 +1,34 @@
+{
+  "name": "delphi-ai-council",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "集思 · Delphi —— 浏览器插件版 AI 议会",
+  "scripts": {
+    "predev": "node -e \"require('fs').mkdirSync('.dev-chrome-profile',{recursive:true})\"",
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@wxt-dev/module-react": "^1.1.3",
+    "typescript": "^5.7.2",
+    "wxt": "^0.19.27"
+  },
+  "pnpm": {
+    "overrides": {
+      "@vitejs/plugin-react": "^4.3.4"
+    }
+  }
+}
