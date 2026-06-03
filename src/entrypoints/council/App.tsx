@@ -103,12 +103,17 @@ export function App() {
   }
 
   async function doContribute(adapter: SiteAdapter) {
-    const ok = await openContributionIssue(adapter, overrides[adapter.id]);
-    setCalibMsg(
-      ok
-        ? `已为 ${adapter.displayName} 打开 GitHub 提交页：请在该页面核对内容后点「Submit new issue」。维护者审核后会合并进社区配置，所有人自动获益。`
-        : `${adapter.displayName} 暂无可贡献的校准，或尚未配置社区配置仓（COMMUNITY_REPO）。`,
-    );
+    const result = await openContributionIssue(adapter, overrides[adapter.id]);
+    if (result.ok) {
+      const extra = result.identicalKeys && result.identicalKeys.length > 0
+        ? `（已自动排除了与内置一致的项：${result.identicalKeys.join('、')}）`
+        : '';
+      setCalibMsg(`已为 ${adapter.displayName} 打开 GitHub 提交页：请在该页面核对内容后点「Submit new issue」。维护者审核后会合并进社区配置，所有人自动获益。${extra}`);
+    } else if (result.noDiff) {
+      setCalibMsg(`当前校准内容与插件内置完全一致（涉及：${result.identicalKeys?.join('、')}），无需重复贡献。`);
+    } else {
+      setCalibMsg(`${adapter.displayName} 暂无可贡献的校准，或尚未配置社区配置仓（COMMUNITY_REPO）。`);
+    }
   }
 
   async function resetSite(adapter: SiteAdapter) {

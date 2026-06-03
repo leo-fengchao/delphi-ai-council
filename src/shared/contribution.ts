@@ -10,7 +10,7 @@
  * 注意：此处的 sanitize 仅为降噪，**真正的安全闸是维护者人工审核**（客户端代码可被绕过）。
  */
 
-import type { InputMethod, PickRole, SiteAdapter, SubmitMethod } from './adapter-schema';
+import { PICK_ROLE_LABELS, type InputMethod, type PickRole, type SiteAdapter, type SubmitMethod } from './adapter-schema';
 import type { SiteOverride } from './overrides';
 
 /**
@@ -95,7 +95,7 @@ function extVersion(): string {
 /** 由适配器 + 本地覆盖构建贡献 payload。 */
 export function buildContributionPayload(
   adapter: SiteAdapter,
-  override: SiteOverride,
+  override: CleanOverride,
 ): ContributionPayload {
   return {
     kind: 'delphi-selector-contribution',
@@ -103,7 +103,7 @@ export function buildContributionPayload(
     schemaVersion: ADAPTER_SCHEMA_VERSION,
     adapterId: adapter.id,
     displayName: adapter.displayName,
-    override: sanitizeForContribution(override),
+    override,
     meta: { extVersion: extVersion(), createdAt: Date.now() },
   };
 }
@@ -139,18 +139,80 @@ export function buildContributionIssueUrl(repo: string, payload: ContributionPay
   return `https://github.com/${repo}/issues/new?${params.toString()}`;
 }
 
+export interface ContributionResult {
+  ok: boolean;
+  identicalKeys?: string[];
+  noDiff?: boolean;
+}
+
+export function diffOverride(adapter: SiteAdapter, override: SiteOverride): { diff: CleanOverride, identicalKeys: string[] } {
+  const diff: CleanOverride = {};
+  const identicalKeys: string[] = [];
+  const clean = sanitizeForContribution(override);
+
+  if (clean.selectors) {
+    const newSelectors: Partial<Record<PickRole, string>> = {};
+    for (const [role, s] of Object.entries(clean.selectors) as [PickRole, string][]) {
+      if (s === adapter.selectors[role]) {
+        identicalKeys.push(PICK_ROLE_LABELS[role] || role);
+      } else {
+        newSelectors[role] = s;
+      }
+    }
+    if (Object.keys(newSelectors).length > 0) {
+      diff.selectors = newSelectors;
+    }
+  }
+
+  if (clean.thinkingActivation) {
+    const current = adapter.thinkingActivation || [];
+    if (JSON.stringify(clean.thinkingActivation) === JSON.stringify(current)) {
+      identicalKeys.push('深度思考');
+    } else {
+      diff.thinkingActivation = clean.thinkingActivation;
+    }
+  }
+
+  if (clean.inputMethod) {
+    if (clean.inputMethod === adapter.input.method) {
+      identicalKeys.push('输入法');
+    } else {
+      diff.inputMethod = clean.inputMethod;
+    }
+  }
+
+  if (clean.submit) {
+    if (clean.submit === adapter.input.submit) {
+      identicalKeys.push('提交方式');
+    } else {
+      diff.submit = clean.submit;
+    }
+  }
+
+  return { diff, identicalKeys };
+}
+
 /**
  * 一站式：在新标签页打开某站点校准的预填贡献 Issue。
- * 返回 false 表示未配置 COMMUNITY_REPO 或该站点无可贡献内容（调用方据此提示/隐藏入口）。
+ * 返回 { ok: false } 表示未配置 COMMUNITY_REPO 或该站点无可贡献内容。
+ * 如果包含与内置相同的配置，会自动剔除；如果全相同则返回 { ok: false, noDiff: true, identicalKeys }。
  */
 export async function openContributionIssue(
   adapter: SiteAdapter,
   override: SiteOverride | undefined,
-): Promise<boolean> {
-  if (!COMMUNITY_REPO) return false;
-  if (!hasContributableOverride(override)) return false;
-  const payload = buildContributionPayload(adapter, override!);
+): Promise<ContributionResult> {
+  if (!COMMUNITY_REPO) return { ok: false };
+  if (!hasContributableOverride(override)) return { ok: false };
+
+  const { diff, identicalKeys } = diffOverride(adapter, override!);
+  
+  if (Object.keys(diff).length === 0) {
+    return { ok: false, noDiff: true, identicalKeys };
+  }
+
+  const payload = buildContributionPayload(adapter, diff);
   const url = buildContributionIssueUrl(COMMUNITY_REPO, payload);
   await chrome.tabs.create({ url });
-  return true;
+  
+  return { ok: true, identicalKeys };
 }

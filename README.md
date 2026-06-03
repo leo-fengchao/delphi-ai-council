@@ -181,6 +181,7 @@ ai-council-extension/
 > 把 Phase 3 的本地校准升级为社区资产：一人校准、众人受益。机制零后端、零授权（严守 C1）。
 - [x] 用户把本地覆盖**一键提交**：扩展序列化为贡献 payload → 打开**预填好的 GitHub Issue** → 用户亲自点提交（`shared/contribution.ts` + 校准列表「贡献」按钮）
 - [x] 信任机制：**维护者人工审核**做信任闸（贡献先落地为带 `selector-contribution` 标签的 Issue，不自动分发）；客户端先 `sanitize` 降噪（仅放行字符串选择器/策略，非安全边界）
+- [x] **贡献前自动比对**：构造 payload 前自动比对本地校准与内置配置，剔除完全一致的项；若全部一致则阻断请求并在前台提示，避免无意义的重复提交
 - [x] 合并进远程配置（ADR-0008 远程源即分发通道），所有用户回源自动获益；优先级仍为 用户本地覆盖 > 远程 > 内置
 - [x] **配置仓模板** `config-repo/`：`adapter-config.json`（由 `pnpm gen:config` 从内置兜底生成，单一真源）+ Issue 模板 + `CONTRIBUTING.md` 审核清单 + 建仓/接线 README
 - [ ] **接线启用**（产品方操作）：建公开配置仓 → 填 `REMOTE_CONFIG_URL`（config-loader）与 `COMMUNITY_REPO`（contribution）→ 补 `host_permissions`（见 `config-repo/README.md`）。两常量留空时贡献入口隐藏、远程跳过（优雅降级）
