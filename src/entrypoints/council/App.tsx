@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useMachine } from '@xstate/react';
+import { councilMachine } from '../../council-page/machine';
 import type { AdapterConfig, PickRole, SiteAdapter } from '../../shared/adapter-schema';
 import { PICK_ROLE_LABELS } from '../../shared/adapter-schema';
 import type { ProgressMessage } from '../../shared/messaging';
 import { loadAdapterConfig, type ConfigSource } from '../../council-page/config-loader';
-import { broadcastStageOne, driveLeg, resumeCouncil, type LegResult, type CouncilTabs } from '../../council-page/orchestrator';
+import { driveLeg, type LegResult, type CouncilTabs } from '../../council-page/orchestrator';
 import { openCalibration, startInPageCalibration, closeCalibration } from '../../council-page/calibration';
 import { clearSiteOverride, exportOverrides, importOverrides, type UserOverrides } from '../../shared/overrides';
 import { loadSession, clearSession, hasRecoverableLegs, type SessionState } from '../../shared/session-state';
@@ -26,45 +28,61 @@ export function App() {
   const [source, setSource] = useState<ConfigSource | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [prompt, setPrompt] = useState('');
-  const [running, setRunning] = useState(false);
   const [legs, setLegs] = useState<Record<string, LegView>>({});
-  // 本次议会开出的标签页与提交的问题，供「重试」复用（登录后重发）。
-  const [council, setCouncil] = useState<CouncilTabs | null>(null);
   const [askedPrompt, setAskedPrompt] = useState('');
-  // Phase 3（ADR-0009）：深度思考开关 + 用户覆盖层 + 校准会话。
   const [enableThinking, setEnableThinking] = useState(false);
   const [overrides, setOverrides] = useState<UserOverrides>({});
-  // 正在校准的站点 id（在站点页内进行）；null 表示无校准进行中。
   const [calibratingId, setCalibratingId] = useState<string | null>(null);
   const [calibMsg, setCalibMsg] = useState('');
-  // 跨浏览器对齐：导出/导入校准的文本框内容。
   const [transferText, setTransferText] = useState('');
-  // Phase 4（ADR-0004/0011）：检测到的可恢复会话（刷新/崩溃后续跑）。
   const [resumable, setResumable] = useState<SessionState | null>(null);
+  const [chairpersonId, setChairpersonId] = useState<string>('');
+
+  const chosen: SiteAdapter[] = useMemo(
+    () => (config ? config.adapters.filter((a) => selected.has(a.id)) : []),
+    [config, selected],
+  );
+
+  const [state, send] = useMachine(councilMachine, {
+    input: {
+      session: null,
+      adapters: chosen,
+      hooks: {
+        onLegStage: (id: string, stage: ProgressMessage['stage']) => setLegs((prev) => ({ ...prev, [id]: { kind: 'running', stage } })),
+        onLegResult: (r: LegResult) => setLegs((prev) => ({ ...prev, [r.adapterId]: toView(r) })),
+      }
+    }
+  });
+
+  const running = !state.matches('idle') && !state.matches('finished') && !state.matches('error');
 
   useEffect(() => {
     loadAdapterConfig().then(({ config, source, overrides }) => {
       setConfig(config);
       setSource(source);
       setOverrides(overrides);
-      // 默认全选中文站点（ToS 风险更低），海外站点默认不选。
       const cn = new Set(['deepseek', 'kimi', 'qwen', 'doubao', 'yuanbao']);
-      setSelected(new Set(config.adapters.filter((a) => cn.has(a.id)).map((a) => a.id)));
+      const selectedIds = config.adapters.filter((a) => cn.has(a.id)).map((a) => a.id);
+      setSelected(new Set(selectedIds));
+      if (selectedIds.length > 0) {
+        setChairpersonId(selectedIds[0] ?? '');
+      }
     });
-    // 检测上次未完成的议会，提示恢复。
     loadSession().then((s) => {
-      if (s && hasRecoverableLegs(s)) setResumable(s);
+      // Allow resuming if not finished
+      if (s && s.status !== 'finished') setResumable(s);
     });
   }, []);
 
-  // 覆盖变化后，重载有效配置（让校准结果即时反映到展示与广播）。
+  // The machine state syncs the adapters during the START event, so we don't need the UPDATE_ADAPTERS effect.
+
+
   async function refreshConfig() {
     const { config, overrides } = await loadAdapterConfig();
     setConfig(config);
     setOverrides(overrides);
   }
 
-  // —— 校准（ADR-0009）：打开站点窗口 → 在站点页内的工具条上完成全部校准 → 关窗刷新 ——
   async function startCalibrate(adapter: SiteAdapter) {
     if (calibratingId) return;
     setCalibratingId(adapter.id);
@@ -72,7 +90,7 @@ export function App() {
     try {
       const session = await openCalibration(adapter);
       setCalibMsg(`已打开 ${adapter.displayName}：在该页面**顶部工具条**上点角色按钮，再到页面点选元素；完成后点工具条「完成校准」。`);
-      await startInPageCalibration(session); // 等用户点页内「完成校准」或关闭窗口
+      await startInPageCalibration(session);
       await closeCalibration(session);
       await refreshConfig();
       setCalibMsg(`${adapter.displayName} 校准完成。`);
@@ -94,7 +112,6 @@ export function App() {
     return sel ? (Object.keys(sel) as PickRole[]) : [];
   }
 
-  // —— 跨浏览器对齐：导出 / 导入校准（ADR-0009）——
   async function doExport() {
     const data = await exportOverrides();
     const json = JSON.stringify(data, null, 2);
@@ -125,55 +142,68 @@ export function App() {
     setCalibMsg(`已合并导入 ${n} 个站点的校准（同名项以导入为准）。`);
   }
 
-  const chosen: SiteAdapter[] = useMemo(
-    () => (config ? config.adapters.filter((a) => selected.has(a.id)) : []),
-    [config, selected],
-  );
-
   function toggle(id: string) {
     if (running) return;
     setSelected((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
+      if (!next.has(chairpersonId) && next.size > 0) {
+        setChairpersonId(Array.from(next)[0] ?? '');
+      } else if (next.size === 0) {
+        setChairpersonId('');
+      }
       return next;
     });
   }
 
-  async function start() {
-    const q = prompt.trim();
-    if (!q || running || chosen.length === 0) return;
-    setRunning(true);
-    setAskedPrompt(q);
-    setLegs(Object.fromEntries(chosen.map((a) => [a.id, { kind: 'pending' } as LegView])));
-
-    const { council, results } = await broadcastStageOne(
-      chosen,
-      q,
-      {
-        onLegStage: (id, stage) => setLegs((prev) => ({ ...prev, [id]: { kind: 'running', stage } })),
-        onLegResult: (r) => setLegs((prev) => ({ ...prev, [r.adapterId]: toView(r) })),
-      },
-      { enableThinking },
-    );
-    setCouncil(council);
-    setLegs(Object.fromEntries(results.map((r) => [r.adapterId, toView(r)])));
-    setRunning(false);
+  async function closeAllTabs() {
+    if (!state.context.session) return;
+    const tabIds: number[] = [];
+    for (const leg of Object.values(state.context.session.legs)) {
+      if (leg.tabId != null) {
+        tabIds.push(leg.tabId);
+      }
+    }
+    if (tabIds.length > 0) {
+      try {
+        await chrome.tabs.remove(tabIds);
+      } catch (err) {
+        console.warn('Failed to close some tabs:', err);
+      }
+    }
   }
 
-  // —— 崩溃恢复（ADR-0004/0011）：续跑上次未完成的议会 ——
+  async function start() {
+    const q = prompt.trim();
+    if (!q || running || chosen.length === 0 || !chairpersonId) return;
+    
+    await closeAllTabs();
+    
+    setAskedPrompt(q);
+    setLegs(Object.fromEntries(chosen.map((a) => [a.id, { kind: 'pending' } as LegView])));
+    send({ type: 'START', prompt: q, enableThinking, chairpersonId, adapters: chosen });
+  }
+
+  async function abort() {
+    if (!running) return;
+    // 先关掉本轮已开的全部 AI 窗口（按 session 记录的 tabId，已覆盖重开过的窗口），再让状态机停下。
+    await closeAllTabs();
+    send({ type: 'ABORT' });
+  }
+
   async function resume() {
     if (!config || !resumable || running) return;
     const session = resumable;
     setResumable(null);
-    setRunning(true);
     setPrompt(session.prompt);
     setAskedPrompt(session.prompt);
     setEnableThinking(session.enableThinking);
-    // 按会话保序取回参会站点（有效配置含用户覆盖）。
+    setChairpersonId(session.chairpersonId ?? session.adapterIds[0] ?? '');
+    
     const byId = new Map(config.adapters.map((a) => [a.id, a] as const));
     const adapters = session.adapterIds.map((id) => byId.get(id)).filter((a): a is SiteAdapter => !!a);
     setSelected(new Set(adapters.map((a) => a.id)));
-    // 用存档初始化各腿展示：已完成的直接显示，其余标记进行中。
+    
     setLegs(
       Object.fromEntries(
         adapters.map((a) => {
@@ -182,13 +212,9 @@ export function App() {
         }),
       ),
     );
-    const { council, results } = await resumeCouncil(session, adapters, {
-      onLegStage: (id, stage) => setLegs((prev) => ({ ...prev, [id]: { kind: 'running', stage } })),
-      onLegResult: (r) => setLegs((prev) => ({ ...prev, [r.adapterId]: toView(r) })),
-    });
-    setCouncil(council);
-    setLegs(Object.fromEntries(results.map((r) => [r.adapterId, toView(r)])));
-    setRunning(false);
+    
+    // Send a new initial event to machine to inject the session context
+    send({ type: 'RESUME', session, adapters });
   }
 
   async function dismissResume() {
@@ -196,9 +222,8 @@ export function App() {
     setResumable(null);
   }
 
-  // 对单家重试：复用已打开的标签页（登录后重发）。
   async function retry(adapter: SiteAdapter) {
-    const tabId = council?.tabs.get(adapter.id);
+    const tabId = state.context.council?.tabs.get(adapter.id);
     if (tabId == null || !askedPrompt) return;
     setLegs((prev) => ({ ...prev, [adapter.id]: { kind: 'running' } }));
     const r = await driveLeg(
@@ -213,12 +238,13 @@ export function App() {
 
   if (!config) return <main style={styles.page}>正在加载适配器配置…</main>;
 
+
   return (
     <main style={styles.page}>
       <header style={styles.header}>
         <h1 style={styles.title}>集思 · Delphi</h1>
         <p style={styles.subtitle}>
-          Phase 2 · 多站点并行广播（阶段一）—— 配置来源：{sourceLabel(source)}
+          Phase 5 · 完整议会（三阶段评议）—— 状态：<strong style={{color: '#2b6cff'}}>{String(state.value)}</strong> —— 配置来源：{sourceLabel(source)}
         </p>
       </header>
 
@@ -260,6 +286,19 @@ export function App() {
       />
 
       <div style={styles.actionRow}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 14 }}>👑 主席：</span>
+          <select 
+            value={chairpersonId} 
+            onChange={(e) => setChairpersonId(e.target.value)}
+            disabled={running || chosen.length === 0}
+            style={styles.select}
+          >
+            {chosen.map(a => (
+              <option key={a.id} value={a.id}>{a.displayName}</option>
+            ))}
+          </select>
+        </div>
         <button
           style={{ ...styles.button, ...(running || !prompt.trim() || chosen.length === 0 ? styles.buttonOff : {}) }}
           onClick={start}
@@ -267,6 +306,16 @@ export function App() {
         >
           {running ? `议事中…（${chosen.length} 家）` : `发起议事（${chosen.length} 家）`}
         </button>
+        {running && (
+          <button style={styles.abortBtn} onClick={abort}>
+            ⏹ 中止议事
+          </button>
+        )}
+        {state.context.session && !running && (
+          <button style={styles.closeBtn} onClick={closeAllTabs}>
+            🧹 关闭所有 AI 窗口
+          </button>
+        )}
         <label style={styles.thinkLabel}>
           <input
             type="checkbox"
@@ -344,6 +393,43 @@ export function App() {
         </div>
       </details>
 
+      {state.context.session?.summary && (
+        <section style={styles.summaryBox}>
+          <h2 style={styles.summaryTitle}>
+            👑 主席综合结论 ({config.adapters.find(a => a.id === state.context.session?.chairpersonId)?.displayName})
+          </h2>
+          
+          {state.context.session.summary.finalAnswer || state.context.session.summary.consensus ? (
+            <>
+              <div style={styles.summaryItem}>
+                <h3 style={styles.summarySubtitle}>最终回答</h3>
+                <pre style={styles.answer}>{state.context.session.summary.finalAnswer}</pre>
+              </div>
+              
+              <div style={styles.summaryGrid}>
+                <div style={styles.summaryItem}>
+                  <h3 style={styles.summarySubtitle}>✅ 共识点</h3>
+                  <pre style={styles.answer}>{state.context.session.summary.consensus}</pre>
+                </div>
+                <div style={styles.summaryItem}>
+                  <h3 style={styles.summarySubtitle}>⚠️ 争议区</h3>
+                  <pre style={styles.answer}>{state.context.session.summary.disputes}</pre>
+                </div>
+              </div>
+              
+              <div style={styles.confidenceBox}>
+                <strong>置信度：</strong> <span style={styles.confidenceScore}>{state.context.session.summary.confidence}</span> / 100
+              </div>
+            </>
+          ) : (
+            <div style={styles.summaryItem}>
+              <h3 style={styles.summarySubtitle}>⚠️ 未匹配到格式化区块，显示原始回答：</h3>
+              <pre style={styles.answer}>{state.context.session.summary.rawText}</pre>
+            </div>
+          )}
+        </section>
+      )}
+
       <section style={styles.results}>
         {chosen.map((a) => {
           const view = legs[a.id] ?? { kind: 'pending' as const };
@@ -356,7 +442,7 @@ export function App() {
               {view.kind === 'error' && (
                 <div>
                   <p style={styles.error}>⚠️ {view.message}</p>
-                  {council?.tabs.has(a.id) && !running && (
+                  {state.context.council?.tabs.has(a.id) && !running && (
                     <button style={styles.retry} onClick={() => retry(a)}>
                       重试（登录后点此重发）
                     </button>
@@ -449,6 +535,28 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   buttonOff: { background: '#b9c4d6', cursor: 'not-allowed' },
+  abortBtn: {
+    marginTop: 12,
+    padding: '10px 20px',
+    fontSize: 15,
+    fontWeight: 600,
+    color: '#fff',
+    background: '#c0392b',
+    border: 'none',
+    borderRadius: 8,
+    cursor: 'pointer',
+  },
+  closeBtn: {
+    marginTop: 12,
+    padding: '10px 20px',
+    fontSize: 15,
+    fontWeight: 600,
+    color: '#555',
+    background: '#f3f3f5',
+    border: '1px solid #d0d0d0',
+    borderRadius: 8,
+    cursor: 'pointer',
+  },
   results: { marginTop: 24, display: 'grid', gap: 12 },
   card: { border: '1px solid #ececf0', borderRadius: 10, padding: 16 },
   cardTitle: { fontSize: 16, fontWeight: 600, margin: '0 0 8px' },
@@ -519,4 +627,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   resumeNote: { color: '#9a8030', marginLeft: 4 },
   resumeBtns: { display: 'flex', gap: 8, flexShrink: 0 },
+  select: { padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d0', fontSize: 14, background: '#fff' },
+  summaryBox: { marginTop: 24, padding: 20, borderRadius: 12, background: '#f5fbff', border: '1px solid #cce5ff' },
+  summaryTitle: { fontSize: 20, fontWeight: 700, margin: '0 0 16px', color: '#004085' },
+  summarySubtitle: { fontSize: 16, fontWeight: 600, margin: '0 0 8px', color: '#004085' },
+  summaryItem: { marginBottom: 16 },
+  summaryGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 },
+  confidenceBox: { marginTop: 16, padding: 12, background: '#fff', borderRadius: 8, border: '1px solid #cce5ff', textAlign: 'center', fontSize: 16 },
+  confidenceScore: { fontSize: 24, fontWeight: 700, color: '#2b6cff' },
 };

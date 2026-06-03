@@ -73,7 +73,7 @@ export async function broadcastStageOne(
     });
   }
 
-  const results = await runLegs(session, council, adapters, hooks);
+  const results = await runStageParallel(session, council, adapters, session.prompt, hooks);
   await finishSession(session);
   return { council, results };
 }
@@ -90,19 +90,21 @@ export async function resumeCouncil(
   hooks: BroadcastHooks = {},
 ): Promise<BroadcastOutcome> {
   const council = reconstructCouncil(session);
-  session.status = 'running';
+  // Status will be handled by machine, but for legacy code we set it here
+  if (session.status === ('running' as any)) session.status = 'stage1';
   await saveSession(session);
-  const results = await runLegs(session, council, adapters, hooks);
+  const results = await runStageParallel(session, council, adapters, session.prompt, hooks);
   await finishSession(session);
   return { council, results };
 }
 
 // ============ 公共：并行驱动各腿 ============
 
-async function runLegs(
+export async function runStageParallel(
   session: SessionState,
   council: CouncilTabs,
   adapters: SiteAdapter[],
+  prompt: string,
   hooks: BroadcastHooks,
 ): Promise<LegResult[]> {
   const watchdog = new Watchdog(session, {
@@ -121,7 +123,7 @@ async function runLegs(
       const result =
         existing?.status === 'done' && existing.text
           ? { adapterId: adapter.id, displayName: adapter.displayName, ok: true, text: existing.text }
-          : await driveLegResilient(session, council, adapter, hooks);
+          : await driveLegResilient(session, council, adapter, prompt, hooks);
       hooks.onLegResult?.(result); // 该腿一出结果就刷新卡片，不等其它腿。
       return result;
     });
@@ -147,10 +149,11 @@ async function runLegs(
  * 韧性版单腿驱动：保证有活标签页 → 驱动 → 收结果；标签页丢失则重开重试（上限内）。
  * 内容级失败（标签页仍在但未登录/验证码/抽取空等）不自动重试，交用户手动「重试」。
  */
-async function driveLegResilient(
+export async function driveLegResilient(
   session: SessionState,
   council: CouncilTabs,
   adapter: SiteAdapter,
+  prompt: string,
   hooks: BroadcastHooks,
 ): Promise<LegResult> {
   await patchLeg(session, adapter.id, { status: 'running', stage: undefined, error: undefined, code: undefined });
@@ -172,7 +175,7 @@ async function driveLegResilient(
     }
 
     // 2) 驱动这一腿。
-    const r = await driveLeg(adapter, tabId, session.prompt, hooks, options);
+    const r = await driveLeg(adapter, tabId, prompt, hooks, options);
     if (r.ok) {
       await patchLeg(session, adapter.id, { status: 'done', stage: undefined, text: r.text, error: undefined, code: undefined });
       return r;
@@ -245,7 +248,7 @@ function createSession(adapters: SiteAdapter[], prompt: string, enableThinking: 
     updatedAt: now,
     adapterIds: adapters.map((a) => a.id),
     legs,
-    status: 'running',
+    status: 'stage1',
   };
 }
 

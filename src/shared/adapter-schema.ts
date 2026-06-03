@@ -50,6 +50,14 @@ export interface AdapterCompletion {
   idleMutationMs: number;
   /** 单腿超时（毫秒） */
   maxWaitMs: number;
+  /**
+   * 可选：部分站点的「发送」与「停止」共用同一个按钮（DeepSeek 输入框右下角的圆形按钮），
+   * 类名/aria 在两种状态下完全相同，唯一区别是按钮内 SVG 图标的形状。
+   * 此处填「生成中（停止图标）」时按钮内 `<svg><path>` 的 `d` 属性前缀；
+   * 仅当 `stopButton` 命中的元素其图标 `d` 以此前缀开头，才算「正在生成」。
+   * 留空则按常规逻辑（stopButton 命中即视为生成中）。纯数据，可远程热更新（ADR-0005）。
+   */
+  stopButtonIconPrefix?: string;
 }
 
 export interface AdapterExtraction {

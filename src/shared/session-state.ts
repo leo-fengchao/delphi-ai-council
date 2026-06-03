@@ -38,8 +38,25 @@ export interface SessionState {
   /** 参会站点（保序），恢复时据此从 config 取回 SiteAdapter */
   adapterIds: string[];
   legs: Record<string, LegState>;
-  /** running：进行中可恢复；finished：全部腿有结论 */
-  status: 'running' | 'finished';
+
+  // --- Phase 2: 交叉评审 ---
+  /** 记录每家在阶段二的互评输出（adapterId -> review text） */
+  reviews?: Record<string, string>;
+
+  // --- Phase 3: 主席综合 ---
+  /** 用户选定的主席模型 adapterId */
+  chairpersonId?: string;
+  /** 主席模型的综合输出解析结果 */
+  summary?: {
+    finalAnswer: string;
+    consensus: string;
+    disputes: string;
+    confidence: string;
+    rawText?: string;
+  };
+
+  /** 状态机顶级阶段，用于恢复时定位 */
+  status: 'stage1' | 'stage2' | 'stage3' | 'finished' | 'error';
 }
 
 const SESSION_KEY = 'delphi:session';
@@ -95,5 +112,5 @@ export async function patchLeg(
 function isSessionState(raw: unknown): raw is SessionState {
   if (!raw || typeof raw !== 'object') return false;
   const s = raw as Partial<SessionState>;
-  return typeof s.id === 'string' && typeof s.prompt === 'string' && !!s.legs && Array.isArray(s.adapterIds);
+  return typeof s.id === 'string' && typeof s.prompt === 'string' && !!s.legs && Array.isArray(s.adapterIds) && typeof s.status === 'string';
 }

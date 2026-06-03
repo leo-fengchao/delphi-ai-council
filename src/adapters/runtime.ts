@@ -220,9 +220,26 @@ async function submit(input: Element, adapter: SiteAdapter): Promise<void> {
   // 全自动发送前加入随机化的人类节奏延迟（ADR-0007 缓解措施）。
   await delay(jitter(400, 250));
 
+  // 无论配置是 clickButton 还是 enterKey，只要配置了 sendButton 且存在，
+  // 都等它变为可用状态再发。应对 Kimi 这种粘入超长文本转附件时，异步处理需几秒钟的问题。
+  const getBtn = () => {
+    if (!adapter.selectors.sendButton) return null;
+    const btns = document.querySelectorAll<HTMLElement>(adapter.selectors.sendButton);
+    for (let i = btns.length - 1; i >= 0; i--) {
+      const b = btns[i]!;
+      if (isVisible(b) && !isDisabled(b)) return b;
+    }
+    return null;
+  };
+
+  let btn = getBtn();
+  if (!btn && adapter.selectors.sendButton) {
+    await waitFor(() => !!getBtn(), 15000);
+    btn = getBtn();
+  }
+
   if (adapter.input.submit === 'clickButton') {
-    const btn = document.querySelector<HTMLElement>(adapter.selectors.sendButton);
-    if (btn && !isDisabled(btn)) {
+    if (btn) {
       robustClick(btn);
       return;
     }
@@ -268,14 +285,26 @@ function pressEnter(input: Element): void {
  */
 async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
   const { stopButton } = adapter.selectors;
-  const { idleMutationMs, maxWaitMs } = adapter.completion;
+  const { idleMutationMs, maxWaitMs, stopButtonIconPrefix } = adapter.completion;
   const deadline = Date.now() + maxWaitMs;
 
   // 1) 若有 stopButton：先等它出现（确认已开始生成），再等它消失。
   if (stopButton) {
-    const appeared = await waitFor(() => !!document.querySelector(stopButton), 8000);
+    const getVisibleStopBtn = () => {
+      for (const el of document.querySelectorAll<HTMLElement>(stopButton)) {
+        // 过滤掉 display: none 或隐藏的无关按钮
+        if (el.offsetWidth <= 0 || el.offsetHeight <= 0) continue;
+        // 发送/停止共用同一按钮的站点（如 DeepSeek）：仅当内部 SVG 图标是「停止」形状才算生成中。
+        // 否则该圆形按钮在「发送箭头」态也会命中，导致刚提交就误判完成→截断。
+        if (stopButtonIconPrefix && !hasIconPrefix(el, stopButtonIconPrefix)) continue;
+        return el;
+      }
+      return null;
+    };
+
+    const appeared = await waitFor(() => !!getVisibleStopBtn(), 25000);
     if (appeared) {
-      const gone = await waitFor(() => !document.querySelector(stopButton), maxWaitMs);
+      const gone = await waitFor(() => !getVisibleStopBtn(), maxWaitMs);
       if (!gone) throw new AdapterError('生成超时（stop 按钮未消失）', 'timeout');
       return;
     }
@@ -299,6 +328,14 @@ function extract(adapter: SiteAdapter): string {
   return '';
 }
 
+/** 按钮内是否存在 `d` 以 prefix 开头的 `<svg><path>`（用于按图标形状判定收发/停止共用按钮的状态）。 */
+function hasIconPrefix(el: HTMLElement, prefix: string): boolean {
+  for (const p of el.querySelectorAll<SVGPathElement>('svg path')) {
+    if ((p.getAttribute('d') ?? '').startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 /** 元素是否可见（有布局盒）。隐藏/display:none 的模板节点会被排除。 */
 function isVisible(el: HTMLElement): boolean {
   return el.offsetParent !== null || el.getClientRects().length > 0;
@@ -307,10 +344,19 @@ function isVisible(el: HTMLElement): boolean {
 // ---- 通用等待原语 ----
 
 async function waitForElement(selector: string, timeoutMs: number): Promise<Element | null> {
-  const found = document.querySelector(selector);
+  const getEl = () => {
+    const els = document.querySelectorAll<HTMLElement>(selector);
+    for (let i = els.length - 1; i >= 0; i--) {
+      const e = els[i]!;
+      if (isVisible(e)) return e;
+    }
+    return els.length > 0 ? els[els.length - 1]! : null;
+  };
+
+  const found = getEl();
   if (found) return found;
-  const ok = await waitFor(() => !!document.querySelector(selector), timeoutMs);
-  return ok ? document.querySelector(selector) : null;
+  const ok = await waitFor(() => !!getEl(), timeoutMs);
+  return ok ? getEl() : null;
 }
 
 /** 轮询条件直到为真或超时。 */

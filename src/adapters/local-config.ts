@@ -18,14 +18,24 @@ const deepseek: SiteAdapter = {
   matches: ['https://chat.deepseek.com/*'],
   newChatUrl: 'https://chat.deepseek.com/',
   selectors: {
-    inputBox: 'textarea#chat-input, textarea[placeholder]',
-    sendButton: 'div[role="button"][aria-disabled], button[type="submit"]',
-    stopButton: 'div[role="button"][aria-label*="stop" i], button[aria-label*="停止"]',
+    inputBox: 'textarea#chat-input, textarea[placeholder], div[contenteditable="true"]',
+    sendButton: 'div[role="button"].ds-button--circle.ds-button--primary, div[role="button"][aria-disabled], button[type="submit"], div[role="button"][aria-label*="发送"], div[role="button"][aria-label*="Send" i]',
+    // DeepSeek 的「发送」与「停止」是输入框右下角同一个圆形按钮，类名/aria 完全相同，
+    // 只有内部 SVG 图标不同。故 stopButton 指向该圆形按钮，再用 completion.stopButtonIconPrefix
+    // 按图标形状区分「正在生成（停止方块）」与「已完成（发送箭头）」。2026-06-03 实测校准。
+    stopButton: 'div[role="button"].ds-button--circle.ds-button--primary',
     // 必须用回答正文容器；不能用 [class*="ds-markdown"]（会过度匹配 ds-markdown-paragraph/ds-markdown-cite 子元素，取到末尾空引用角标）。
-    assistantMessage: '.ds-assistant-message-main-content',
+    assistantMessage: '.ds-assistant-message-main-content, .markdown-body',
   },
-  input: { method: 'setNativeValue', submit: 'enterKey' },
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1000, maxWaitMs: 120000 },
+  input: { method: 'paste', submit: 'clickButton' },
+  // 停止方块图标 path 以 'M2 4.88' 开头；发送箭头以 'M8.3125' 开头。只要图标翻回箭头即判完成——
+  // 即时、精确、不被深度思考的中途停顿截断。idleMutationMs 仅作选择器失效时的兜底（调回常规值）。
+  completion: {
+    primarySignal: 'stopButtonDisappears',
+    idleMutationMs: 3000,
+    maxWaitMs: 300000,
+    stopButtonIconPrefix: 'M2 4.88',
+  },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: { loggedOutSelector: 'a[href*="login"], a[href*="sign_in"]' },
 };
@@ -45,8 +55,8 @@ const kimi: SiteAdapter = {
     assistantMessage: '.chat-content-item-assistant .markdown-container .markdown',
   },
   // Kimi 是自定义富文本编辑器（类 Lexical），只认 paste 注入，execCommand/直写都会被清空。
-  input: { method: 'paste', submit: 'enterKey' },
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1500, maxWaitMs: 120000 },
+  input: { method: 'paste', submit: 'clickButton' },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 120000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: { loggedOutSelector: 'button[class*="login"]' },
 };
@@ -69,7 +79,7 @@ const qwen: SiteAdapter = {
   },
   // 千问用 paste 注入（execCommand 不更新其框架状态、发送键保持灰色）；并改点按钮发送。
   input: { method: 'paste', submit: 'clickButton' },
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1200, maxWaitMs: 120000 },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 120000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: { loggedOutSelector: 'a[href*="login"]' },
 };
@@ -90,7 +100,7 @@ const doubao: SiteAdapter = {
   // 豆包回车=换行，必须点发送按钮。
   input: { method: 'setNativeValue', submit: 'clickButton' },
   // 豆包流式中有搜索/图片/表格的停顿，静默阈值调大，避免抓到一半就误判完成。
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 2800, maxWaitMs: 120000 },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 4000, maxWaitMs: 120000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: {
     loggedOutSelector: 'button[class*="login"], a[href*="login"]',
@@ -114,8 +124,9 @@ const yuanbao: SiteAdapter = {
     // 回答正文在 .hyc-common-markdown；不要用整个 bubble（含工具栏/相关视频/追问，innerText 很脏）。
     assistantMessage: '.agent-chat__bubble--ai .hyc-common-markdown',
   },
-  input: { method: 'execCommandInsertText', submit: 'enterKey' },
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1500, maxWaitMs: 120000 },
+  // 腾讯元宝也是 Quill 富文本编辑器，使用 paste 能正确保留多行文本的换行符。
+  input: { method: 'paste', submit: 'enterKey' },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 120000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: { loggedOutSelector: 'a[href*="login"]' },
 };
@@ -138,7 +149,7 @@ const chatgpt: SiteAdapter = {
     assistantMessage: 'div[data-message-author-role="assistant"]',
   },
   input: { method: 'execCommandInsertText', submit: 'enterKey' },
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1200, maxWaitMs: 180000 },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 180000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: { loggedOutSelector: 'a[href*="/auth/login"], button[data-testid="login-button"]' },
 };
@@ -157,7 +168,7 @@ const claude: SiteAdapter = {
     assistantMessage: '.standard-markdown',
   },
   input: { method: 'execCommandInsertText', submit: 'enterKey' },
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1200, maxWaitMs: 180000 },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 180000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   // 不设 loggedOutSelector：claude.ai 登录态下也有各种链接，易误判；未登录时自身会跳转登录页。
   auth: {},
@@ -187,7 +198,7 @@ const gemini: SiteAdapter = {
     'div.popover-menu > gem-menu.ng-star-inserted > gem-menu-item.ng-star-inserted > gem-menu-item-content > div.label-container',
     'div.ng-star-inserted > gem-menu > gem-menu-item.ng-star-inserted > gem-menu-item-content.checkmark-only > div.label-container',
   ],
-  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 1200, maxWaitMs: 180000 },
+  completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 180000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   // 不设 loggedOutSelector：登录态下 Gemini 页面本就有指向 accounts.google.com 的链接（账号菜单），会误判未登录。
   auth: {},
