@@ -33,9 +33,9 @@ export async function runCalibrationToolbar(adapterId: string, displayName: stri
   Object.assign(bar.style, {
     position: 'fixed',
     zIndex: '2147483647',
-    left: '0',
-    right: '0',
-    top: '0',
+    left: '50%',
+    top: '20px',
+    transform: 'translateX(-50%)',
     background: '#13151a',
     color: '#fff',
     padding: '8px 14px',
@@ -46,7 +46,51 @@ export async function runCalibrationToolbar(adapterId: string, displayName: stri
     fontSize: '13px',
     fontFamily: 'system-ui, -apple-system, "PingFang SC", sans-serif',
     boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
+    borderRadius: '8px',
+    cursor: 'move',
+    userSelect: 'none',
+    width: 'max-content',
+    maxWidth: '90vw',
   } satisfies Partial<CSSStyleDeclaration>);
+
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+  let initialLeft = 0;
+  let initialTop = 0;
+
+  bar.addEventListener('mousedown', (e) => {
+    if ((e.target as HTMLElement).tagName.toLowerCase() === 'button') {
+      return;
+    }
+    isDragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    
+    const rect = bar.getBoundingClientRect();
+    bar.style.transform = 'none';
+    bar.style.left = `${rect.left}px`;
+    bar.style.top = `${rect.top}px`;
+    initialLeft = rect.left;
+    initialTop = rect.top;
+    
+    e.preventDefault();
+  });
+
+  const onMouseMove = (e: MouseEvent) => {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    bar.style.left = `${initialLeft + dx}px`;
+    bar.style.top = `${initialTop + dy}px`;
+  };
+
+  const onMouseUp = () => {
+    isDragging = false;
+  };
+
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
 
   const title = document.createElement('strong');
   title.textContent = `校准 ${displayName}`;
@@ -109,13 +153,13 @@ export async function runCalibrationToolbar(adapterId: string, displayName: stri
     const doneBtn = mkBtn('完成校准', '#2b6cff');
     doneBtn.addEventListener('click', () => {
       if (busy) return;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
       bar.remove();
       resolve();
     });
     bar.appendChild(doneBtn);
     document.body.appendChild(bar);
-    // 把页面整体下推，避免工具条遮住站点顶部（尽力而为）。
-    document.documentElement.style.scrollPaddingTop = '48px';
   });
 }
 
