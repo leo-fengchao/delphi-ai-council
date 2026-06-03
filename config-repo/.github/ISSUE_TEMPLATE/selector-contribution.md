@@ -36,4 +36,4 @@ labels: selector-contribution
 - 是否已在该站点实测「注入 → 发送 → 抽取」跑通：
 - 站点是否近期改版 / 其它备注：
 
-<!-- 维护者将按 CONTRIBUTING.md 核验后合并。感谢贡献！ -->
+<!-- 维护者将按 CONTRIBUTING.md 核验后合并。 -->

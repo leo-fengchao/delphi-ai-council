@@ -116,7 +116,7 @@ export function buildContributionIssueUrl(repo: string, payload: ContributionPay
   const title = `[选择器贡献] ${payload.displayName} (${payload.adapterId})`;
   const json = JSON.stringify(payload, null, 2);
   const body = [
-    '感谢贡献！以下是「集思 · Delphi」扩展自动生成的站点选择器校准，供维护者审核后合并进 `adapter-config.json`。',
+    '以下是「集思 · Delphi」扩展自动生成的站点选择器校准，供维护者审核后合并进 `adapter-config.json`。',
     '',
     `- 站点：**${payload.displayName}** (\`${payload.adapterId}\`)`,
     `- 扩展版本：${payload.meta.extVersion}`,
