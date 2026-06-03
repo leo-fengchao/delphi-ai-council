@@ -177,11 +177,13 @@ ai-council-extension/
 - [x] **重跑正确性修复**：新一轮 `START` 重置 `council`（窗口重新按网格平铺，不再层叠）+ 清空旧 `summary`/`reviews`（旧主席结论不再残留）
 - [x] **DeepSeek 完成检测校准**：收/停共用按钮按 SVG 图标形状判定（`completion.stopButtonIconPrefix`）——输出完即时收尾、不被深度思考停顿截断（取代原 8s 静默兜底）
 
-### Phase 6 · 众包共创（选择器社区共享）
-> 把 Phase 3 的本地校准升级为社区资产：一人校准、众人受益。
-- [ ] 用户把本地覆盖配置一键提交（PR 到 GitHub 配置仓 / 社区接口）
-- [ ] 审核 / 信任机制（防恶意选择器）
-- [ ] 合并进远程配置（ADR-0008 远程源即分发通道），所有用户自动获益
+### Phase 6 · 众包共创（选择器社区共享，ADR-0013）✅
+> 把 Phase 3 的本地校准升级为社区资产：一人校准、众人受益。机制零后端、零授权（严守 C1）。
+- [x] 用户把本地覆盖**一键提交**：扩展序列化为贡献 payload → 打开**预填好的 GitHub Issue** → 用户亲自点提交（`shared/contribution.ts` + 校准列表「贡献」按钮）
+- [x] 信任机制：**维护者人工审核**做信任闸（贡献先落地为带 `selector-contribution` 标签的 Issue，不自动分发）；客户端先 `sanitize` 降噪（仅放行字符串选择器/策略，非安全边界）
+- [x] 合并进远程配置（ADR-0008 远程源即分发通道），所有用户回源自动获益；优先级仍为 用户本地覆盖 > 远程 > 内置
+- [x] **配置仓模板** `config-repo/`：`adapter-config.json`（由 `pnpm gen:config` 从内置兜底生成，单一真源）+ Issue 模板 + `CONTRIBUTING.md` 审核清单 + 建仓/接线 README
+- [ ] **接线启用**（产品方操作）：建公开配置仓 → 填 `REMOTE_CONFIG_URL`（config-loader）与 `COMMUNITY_REPO`（contribution）→ 补 `host_permissions`（见 `config-repo/README.md`）。两常量留空时贡献入口隐藏、远程跳过（优雅降级）
 
 ### Phase 7 · 上架准备
 - [ ] 风险缓解形态定稿（半自动确认？见 ADR-0007 反向决策预案）
@@ -190,7 +192,7 @@ ai-council-extension/
 
 **后台渲染问题（关键，已定方案 ADR-0010）：** 后台/非激活标签页里浏览器会暂停 `requestAnimationFrame`、拒绝 `focus()`、不渲染虚拟列表 → 注入/点击/抽取全部失败（切到前台才正常）。`visibility.content.ts` 的可见性伪装只能骗过站点自身的 `document.hidden` 暂停，盖不住内核层限制。**采用方案：每站一窗、并排平铺**（`council-tabs.ts`），让每个站点的标签页都「激活且可见」从而真正渲染。代价是占屏；更省屏的渲染保活为优化项（见 roadmap）。
 
-**Current Focus：** Phase 4 韧性层 + 一轮实机问题修复已完成（构建/类型检查通过）。本轮修复：①就绪探测改为 **ping 轮询**（替代单次 READY 广播，根治"等待页面就绪超时"误判、偶发发送失败、重开标签页不恢复）；②**各腿出结果即时刷新卡片**（不再卡在"抽取回答"等其它家超时）；③Kimi **重复注入 3 次**（注入前清空 + 异步校验，命中即停）；④抽取**跳过隐藏/空节点**（缓解豆包抓到文件拖放占位）。深度思考开关优化降级到 Backlog。**下一步：再次实机联调**复测上述场景；随后进入 Phase 5（完整议会：引入 XState + 匿名互评 + 主席综合）。海外 3 家加载方式见下「海外站点」。
+**Current Focus：** Phase 6 众包共创已完成（构建/类型检查通过）。本地校准可经**预填 GitHub Issue** 一键提交（`shared/contribution.ts` + 校准列表「贡献」按钮），维护者人工审核后合并进配置仓、经 ADR-0008 远程源回流分发，形成「一人校准、众人受益」闭环；全程零后端、零授权（ADR-0013）。配置仓骨架见 `config-repo/`（`adapter-config.json` 由 `pnpm gen:config` 从内置兜底生成）。**下一步：产品方建公开配置仓并接线两常量（`REMOTE_CONFIG_URL` / `COMMUNITY_REPO`）启用整条链路**；随后进入 Phase 7（上架准备）。海外 3 家加载方式见下「海外站点」。
 
 ### 海外站点（ChatGPT / Claude / Gemini）的实测方式
 
@@ -220,6 +222,8 @@ ai-council-extension/
 - [ADR-0009](docs/adr/0009-user-visual-selector-override.md) · 用户可视化校准 + 本地选择器覆盖层（Phase 3，优先于韧性层）
 - [ADR-0010](docs/adr/0010-per-window-tiling-for-background-rendering.md) · 每站一窗、并排平铺，解决后台标签页不渲染（修订 ADR-0004 承载方式）
 - [ADR-0011](docs/adr/0011-resilience-lightweight-persisted-orchestration.md) · 韧性层先用轻量持久化编排，XState 推迟到 Phase 5
+- [ADR-0012](docs/adr/0012-xstate-orchestration.md) · 引入 XState 把议会编排重构为声明式状态机（Phase 5 迁移落地）
+- [ADR-0013](docs/adr/0013-crowdsourced-selector-sharing.md) · 众包共创：GitHub Issue 提交 + 维护者人工审核 + 远程回流分发（Phase 6）
 
 ---
 

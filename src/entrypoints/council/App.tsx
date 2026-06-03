@@ -8,6 +8,7 @@ import { loadAdapterConfig, type ConfigSource } from '../../council-page/config-
 import { driveLeg, type LegResult, type CouncilTabs } from '../../council-page/orchestrator';
 import { openCalibration, startInPageCalibration, closeCalibration } from '../../council-page/calibration';
 import { clearSiteOverride, exportOverrides, importOverrides, type UserOverrides } from '../../shared/overrides';
+import { COMMUNITY_REPO, openContributionIssue } from '../../shared/contribution';
 import { loadSession, clearSession, hasRecoverableLegs, type SessionState } from '../../shared/session-state';
 
 const STAGE_LABEL: Record<ProgressMessage['stage'], string> = {
@@ -99,6 +100,15 @@ export function App() {
     } finally {
       setCalibratingId(null);
     }
+  }
+
+  async function doContribute(adapter: SiteAdapter) {
+    const ok = await openContributionIssue(adapter, overrides[adapter.id]);
+    setCalibMsg(
+      ok
+        ? `已为 ${adapter.displayName} 打开 GitHub 提交页：请在该页面核对内容后点「Submit new issue」。维护者审核后会合并进社区配置，所有人自动获益。`
+        : `${adapter.displayName} 暂无可贡献的校准，或尚未配置社区配置仓（COMMUNITY_REPO）。`,
+    );
   }
 
   async function resetSite(adapter: SiteAdapter) {
@@ -333,6 +343,9 @@ export function App() {
         <p style={styles.calibHint}>
           选择器随站点改版会失效。点「校准」打开该站点窗口，**校准操作全部在那个页面的顶部工具条上完成**
           （点角色按钮 → 到页面点选元素；回答区点某条 AI 回复正文；深度思考多步在页内连续点选）。完成后点工具条「完成校准」即可。优先级：你的校准 &gt; 远程 &gt; 内置。
+          {COMMUNITY_REPO
+            ? ' 校准好的站点可点「贡献」提交到社区，审核后所有用户自动受益（ADR-0013）。'
+            : ''}
         </p>
         {calibMsg && <p style={styles.calibStatus}>{calibMsg}</p>}
         <div style={styles.calibList}>
@@ -356,6 +369,11 @@ export function App() {
                   ) : (
                     <button style={styles.smallBtn} disabled={!!calibratingId} onClick={() => startCalibrate(a)}>
                       校准
+                    </button>
+                  )}
+                  {(roles.length > 0 || thinkSteps > 0) && !active && COMMUNITY_REPO && (
+                    <button style={styles.smallBtn} title="把此校准提交到社区，审核后所有用户受益" onClick={() => doContribute(a)}>
+                      贡献
                     </button>
                   )}
                   {(roles.length > 0 || thinkSteps > 0) && !active && (
