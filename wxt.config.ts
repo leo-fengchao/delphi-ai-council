@@ -34,6 +34,9 @@ export default defineConfig({
       'https://chat.openai.com/*',
       'https://claude.ai/*',
       'https://gemini.google.com/*',
+      // ADR-0008/0013：远程适配器配置源（raw）+ 众包贡献提交（github.com 打开预填 Issue）。
+      'https://raw.githubusercontent.com/*',
+      'https://github.com/*',
     ],
     // 声明 action 才能让工具栏图标可点、触发 background 的 onClicked（打开 Council Page）。
     action: {},

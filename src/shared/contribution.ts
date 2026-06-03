@@ -18,7 +18,7 @@ import type { SiteOverride } from './overrides';
  * 留空则隐藏「贡献」入口（优雅降级，不影响本地使用）。
  * 用户建好公开仓后填此处，并把 config-loader.ts 的 REMOTE_CONFIG_URL 指向该仓的 raw adapter-config.json。
  */
-export const COMMUNITY_REPO = '';
+export const COMMUNITY_REPO = 'leo-fengchao/delphi-config';
 
 /** 贡献 payload 当前结构版本，便于维护者侧解析与未来演进。 */
 export const CONTRIBUTION_VERSION = 1;

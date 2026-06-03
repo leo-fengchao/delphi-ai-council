@@ -14,7 +14,7 @@ import { applyOverride, readAllOverrides, type UserOverrides } from '../shared/o
  * 留空则跳过远程、直接走本地兜底；接入时填公开仓库的 raw JSON URL，
  * 并在 wxt.config.ts 的 host_permissions 增补该域名。
  */
-const REMOTE_CONFIG_URL = '';
+const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/leo-fengchao/delphi-config/refs/heads/main/adapter-config.json';
 
 const CACHE_KEY = 'delphi:adapterConfig';
 const CACHE_TS_KEY = 'delphi:adapterConfig:ts';
