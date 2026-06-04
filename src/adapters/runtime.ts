@@ -362,36 +362,61 @@ function pressEnter(input: Element): void {
  * 等待生成完成。主依据 stopButton 出现→消失；辅以 DOM 静默兜底。
  * 任一达成即判完成；超过 maxWaitMs 抛超时。
  */
+/**
+ * 等待生成完成。主依据停止键「出现→消失」，但**会跨过「深度思考→作答」之间停止键短暂消失、
+ * 回答尚未出现的空档**（ChatGPT 深度思考实测：思考结束停止键消失 ~5s 后回答才出现）——
+ * 旧逻辑「停止键一消失即判完成」会在此空档误判完成→提前截止/抽空。
+ *
+ * 判完成的条件：停止键已消失，且短暂宽限内**没有重新出现**、且此时回答区**已非空**。
+ * 若停止键消失时回答仍为空（思考空档），则继续等待其重新出现（作答阶段）或回答出现。
+ */
 async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
-  const { stopButton } = adapter.selectors;
+  const { stopButton, assistantMessage } = adapter.selectors;
   const { idleMutationMs, maxWaitMs, stopButtonIconPrefix } = adapter.completion;
   const deadline = Date.now() + maxWaitMs;
+  /** 停止键消失后，留出的「确认不是思考→作答空档」宽限：等它重新出现或回答出现。 */
+  const GAP_GRACE_MS = 6000;
 
-  // 1) 若有 stopButton：先等它出现（确认已开始生成），再等它消失。
+  const isStopVisible = () => {
+    for (const el of queryElements(stopButton ?? '')) {
+      if (el.offsetWidth <= 0 || el.offsetHeight <= 0) continue;
+      // 收/停共用同一按钮的站点（如 DeepSeek）：仅当内部 SVG 图标是「停止」形状才算生成中。
+      if (stopButtonIconPrefix && !hasIconPrefix(el, stopButtonIconPrefix)) continue;
+      return true;
+    }
+    return false;
+  };
+  const answerLen = () => {
+    let best = 0;
+    for (const el of queryElements(assistantMessage)) {
+      if (!isVisible(el)) continue;
+      const n = (el.innerText ?? el.textContent ?? '').trim().length;
+      if (n > best) best = n;
+    }
+    return best;
+  };
+
+  // 1) 若有 stopButton：先等生成真正开始（停止键出现，或回答开始有内容）。
   if (stopButton) {
-    const getVisibleStopBtn = () => {
-      for (const el of queryElements(stopButton)) {
-        // 过滤掉 display: none 或隐藏的无关按钮
-        if (el.offsetWidth <= 0 || el.offsetHeight <= 0) continue;
-        // 发送/停止共用同一按钮的站点（如 DeepSeek）：仅当内部 SVG 图标是「停止」形状才算生成中。
-        // 否则该圆形按钮在「发送箭头」态也会命中，导致刚提交就误判完成→截断。
-        if (stopButtonIconPrefix && !hasIconPrefix(el, stopButtonIconPrefix)) continue;
-        return el;
+    const started = await waitFor(() => isStopVisible() || answerLen() > 0, 25000);
+    if (started) {
+      while (Date.now() < deadline) {
+        // 等停止键消失。
+        const gone = await waitFor(() => !isStopVisible(), deadline - Date.now());
+        if (!gone) throw new AdapterError('生成超时（stop 按钮未消失）', 'timeout');
+        // 宽限期内：若停止键重新出现 → 是思考→作答的空档，继续等；若期间回答出现 → 提前结束等待。
+        await waitFor(() => isStopVisible() || answerLen() > 0, GAP_GRACE_MS);
+        if (isStopVisible()) continue; // 作答阶段开始了，回到上面等它再次消失
+        // 停止键确实保持消失：回答非空即判完成；回答仍空则视作（空）完成，交给抽取报空。
+        return;
       }
-      return null;
-    };
-
-    const appeared = await waitFor(() => !!getVisibleStopBtn(), 25000);
-    if (appeared) {
-      const gone = await waitFor(() => !getVisibleStopBtn(), maxWaitMs);
-      if (!gone) throw new AdapterError('生成超时（stop 按钮未消失）', 'timeout');
-      return;
+      throw new AdapterError('生成超时', 'timeout');
     }
     // stopButton 没等到——可能选择器失效或生成极快，落到静默兜底。
   }
 
   // 2) 静默兜底：assistantMessage 子树连续 idleMutationMs 无变更即视为完成。
-  const target = queryFirst(adapter.selectors.assistantMessage)?.parentElement ?? document.body;
+  const target = queryFirst(assistantMessage)?.parentElement ?? document.body;
   await waitForIdle(target, idleMutationMs, deadline);
 }
 
