@@ -11,10 +11,14 @@ import { applyOverride, readAllOverrides, type UserOverrides } from '../shared/o
 
 /**
  * 远程配置源（ADR-0008，定稿 Q5 = GitHub raw）。
- * 留空则跳过远程、直接走本地兜底；接入时填公开仓库的 raw JSON URL，
- * 并在 wxt.config.ts 的 host_permissions 增补该域名。
+ * 留空则跳过远程**且不读缓存**、直接以内置兜底为准——开发/自用期把内置当唯一真源，
+ * 避免「云端旧配置 + 6 小时缓存」盖掉刚改好的内置（用户覆盖仍最高优先）。
+ * 要对外分发时再填公开仓库的 raw JSON URL，并在 wxt.config.ts 的 host_permissions 增补该域名。
+ *
+ * 注：开发自用期暂时留空（社区仓地址备忘）：
+ *   https://raw.githubusercontent.com/leo-fengchao/delphi-config/refs/heads/main/adapter-config.json
  */
-const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/leo-fengchao/delphi-config/refs/heads/main/adapter-config.json';
+const REMOTE_CONFIG_URL = '';
 
 const CACHE_KEY = 'delphi:adapterConfig';
 const CACHE_TS_KEY = 'delphi:adapterConfig:ts';
@@ -49,6 +53,9 @@ export async function loadAdapterConfig(): Promise<LoadResult> {
 
 /** 三级回退取基础配置（覆盖前）。 */
 async function loadBaseConfig(): Promise<{ config: AdapterConfig; source: ConfigSource }> {
+  // 0) 未配置远程源：内置兜底即唯一真源，**跳过缓存**（否则上次远程拉取留下的旧缓存仍会盖掉内置）。
+  if (!REMOTE_CONFIG_URL) return { config: LOCAL_ADAPTER_CONFIG, source: 'bundled' };
+
   // 1) 缓存未过期则直接用。
   const cached = await readCache();
   if (cached && cached.fresh) return { config: cached.config, source: 'cache' };
