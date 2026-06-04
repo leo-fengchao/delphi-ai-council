@@ -23,7 +23,7 @@ export interface RunHooks {
 }
 
 export interface RunOptions {
-  /** 发送前点击「深度思考」开关（需 adapter.selectors.thinkingToggle，ADR-0009） */
+  /** 发送前确保「深度思考」为开启态（按 adapter.thinkingActivation 步骤，ADR-0009 / Phase 7） */
   enableThinking?: boolean;
 }
 
@@ -46,16 +46,9 @@ export async function runAdapter(
 
   hooks.onStage?.('injecting');
 
-  // 发送前按需开启「深度思考」（ADR-0009）：按序逐步点击。
-  // 多步站点（豆包/Kimi）后一步的元素往往要等前一步点击后才出现，故每步都「等待→点击→略等」。
-  // 未校准或某步失败都不阻断主流程。
-  if (options.enableThinking && adapter.thinkingActivation?.length) {
-    for (const selector of adapter.thinkingActivation) {
-      const step = await waitForElement(selector, 4000);
-      if (!step) break; // 某步元素没出现：放弃后续步骤，但仍继续发送。
-      robustClick(step as HTMLElement);
-      await delay(jitter(350, 250));
-    }
+  // 发送前按需开启「深度思考」（ADR-0009 / Phase 7 ADR-0016）。
+  if (options.enableThinking) {
+    await ensureThinkingOn(adapter);
   }
 
   const input = await waitForElement(adapter.selectors.inputBox, 10000);
@@ -83,6 +76,41 @@ export async function runAdapter(
     throw new AdapterError('抽取到的回答为空（抽取选择器可能已失效）', 'extraction_empty');
   }
   return text;
+}
+
+/**
+ * 确保「深度思考」处于开启态（Phase 7 / ADR-0016）。
+ * 关键：先用 thinkingActive 检测当前是否已开——已开则**跳过点击**，避免站点记忆上次状态时被点关（误关）。
+ * 未开（或未配置检测选择器）才按 thinkingActivation 序列逐步点击。
+ * 多步站点（豆包/Kimi）后一步元素常要等前一步点击后才出现，故每步「等待→点击→略等」。
+ * 未校准或某步失败都不阻断主流程（尽力而为，仍继续发送）。
+ */
+async function ensureThinkingOn(adapter: SiteAdapter): Promise<void> {
+  const activeSel = adapter.selectors.thinkingActive;
+  if (activeSel && isThinkingOn(activeSel)) return; // 已开，避免误关
+
+  const steps = adapter.thinkingActivation;
+  if (!steps?.length) return;
+  for (const selector of steps) {
+    const step = await waitForElement(selector, 4000);
+    if (!step) break; // 某步元素没出现：放弃后续步骤，但仍继续发送。
+    robustClick(step as HTMLElement);
+    await delay(jitter(350, 250));
+    // 若每步点击后即可检测到「已开」，提前结束剩余步骤，进一步降低误操作概率。
+    if (activeSel && isThinkingOn(activeSel)) return;
+  }
+}
+
+/** 「深度思考已开」标志是否命中（存在且可见）。 */
+function isThinkingOn(selector: string): boolean {
+  try {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+      if (isVisible(el)) return true;
+    }
+  } catch {
+    /* 选择器非法等：按未开处理 */
+  }
+  return false;
 }
 
 /**

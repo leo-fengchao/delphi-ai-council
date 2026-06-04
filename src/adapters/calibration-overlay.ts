@@ -10,7 +10,7 @@ import { PICK_ROLE_LABELS, type PickRole } from '../shared/adapter-schema';
 import { pickElement, pickSequence, type PickKind } from './picker';
 import { writeRoleSelector, writeThinkingActivation, readSiteOverride } from '../shared/overrides';
 
-const ROLES: PickRole[] = ['inputBox', 'sendButton', 'assistantMessage', 'stopButton'];
+const ROLES: PickRole[] = ['inputBox', 'sendButton', 'assistantMessage', 'stopButton', 'thinkingActive'];
 
 /** 角色 → 拾取种类（决定元素归一化与选择器策略）。 */
 const ROLE_KIND: Record<PickRole, PickKind> = {
@@ -18,6 +18,8 @@ const ROLE_KIND: Record<PickRole, PickKind> = {
   sendButton: 'clickable',
   stopButton: 'clickable',
   assistantMessage: 'content',
+  // 「思考已开」标志：点选当深度思考为开启态时才出现/高亮的元素（Phase 7 / ADR-0016）。
+  thinkingActive: 'clickable',
 };
 
 /** 注入工具条；用户点「完成校准」时 resolve。 */

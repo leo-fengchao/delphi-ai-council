@@ -186,12 +186,14 @@ ai-council-extension/
 - [x] **配置仓模板** `config-repo/`：`adapter-config.json`（由 `pnpm gen:config` 从内置兜底生成，单一真源）+ Issue 模板 + `CONTRIBUTING.md` 审核清单 + 建仓/接线 README
 - [ ] **接线启用**（产品方操作）：建公开配置仓 → 填 `REMOTE_CONFIG_URL`（config-loader）与 `COMMUNITY_REPO`（contribution）→ 补 `host_permissions`（见 `config-repo/README.md`）。两常量留空时贡献入口隐藏、远程跳过（优雅降级）
 
-### Phase 7 · 深度思考默认开启（议事质量基线）
+### Phase 7 · 深度思考默认开启（议事质量基线，ADR-0016）· 进行中
 > 动机：既然已动用「集思」，就应让每个模型拿出最深思熟虑的回答，再进入完善的评审/辩论，最终结论才有意义。深度思考是议事质量的基线，故**默认开启**。
-- [ ] 全员默认开启深度思考：广播前对各站点 `thinkingToggle` 按需点击置为「开」
-- [ ] 依赖前置：先解决 Backlog「深度思考开关优化」的稳定性（状态检测、避免误关、多步交互重做），否则默认开启不可靠
-- [ ] 主席模型深度思考**强制开启**，不受用户开关影响
-- [ ] （低优先级）提供用户级「关闭深度思考」开关：仅作用于非主席成员；主席仍强制开。初版面向产品方自用、默认全开，此项可后置
+- [x] 全员默认开启深度思考：Council Page「深度思考」开关初值为开；发送前按 `thinkingActivation` 步骤置为「开」
+- [x] 依赖前置·稳定性修复：新增可校准的 `selectors.thinkingActive`（命中=已开），运行时 `ensureThinkingOn` **先检测已开则跳过点击**（杜绝误关），未开才逐步点击、命中即提前结束（`runtime.ts`）
+- [x] 主席模型深度思考**强制开启**：per-leg 控制 `enableThinking || adapterId===chairpersonId`，主席阶段一/三恒开，总开关仅影响其他成员（`orchestrator.ts`）
+- [x] 校准接入：`thinkingActive` 作为新可点选角色（「思考已开·标志」）纳入页内校准工具条
+- [ ] **实机联调**：逐站校准 `thinkingActivation` 多步 + `thinkingActive` 标志 → 验证已开跳过、未开开启、不再误关
+- [ ] （低优先级）用户级「关闭深度思考」开关仅作用于非主席成员；主席仍强制开。初版默认全开，此项可后置
 
 ### Phase 8 · 多轮辩论 Debate（≤3 轮，待立 ADR-0014）
 > 动机：当前评审后主席仅凭「一轮输出」综合，对部分要点可能仍不确定。引入主席对匿名成员的**定向追问**与多轮往返，能显著提升结论完成度。
@@ -217,7 +219,7 @@ ai-council-extension/
 
 **后台渲染问题（关键，已定方案 ADR-0010）：** 后台/非激活标签页里浏览器会暂停 `requestAnimationFrame`、拒绝 `focus()`、不渲染虚拟列表 → 注入/点击/抽取全部失败（切到前台才正常）。`visibility.content.ts` 的可见性伪装只能骗过站点自身的 `document.hidden` 暂停，盖不住内核层限制。**采用方案：每站一窗、并排平铺**（`council-tabs.ts`），让每个站点的标签页都「激活且可见」从而真正渲染。代价是占屏；更省屏的渲染保活为优化项（见 roadmap）。
 
-**Current Focus：** Phase 6 众包共创已完成（构建/类型检查通过）。本地校准可经**预填 GitHub Issue** 一键提交（`shared/contribution.ts` + 校准列表「贡献」按钮），维护者人工审核后合并进配置仓、经 ADR-0008 远程源回流分发，形成「一人校准、众人受益」闭环；全程零后端、零授权（ADR-0013）。配置仓骨架见 `config-repo/`（`adapter-config.json` 由 `pnpm gen:config` 从内置兜底生成）。**下一步：产品方建公开配置仓并接线两常量（`REMOTE_CONFIG_URL` / `COMMUNITY_REPO`）启用整条链路**。新增议事质量与体验增强（Phase 7 深度思考默认开启 / Phase 8 多轮辩论 Debate / Phase 9 UI 精调，详见 Roadmap），宜在 Phase 10 上架准备前完成。海外 3 家加载方式见下「海外站点」。
+**Current Focus：** Phase 7 深度思考默认开启已完成代码（构建/类型检查通过，待实机联调）。要点（ADR-0016）：①开关默认开；②新增可校准的 `selectors.thinkingActive`（命中=已开），运行时 `ensureThinkingOn` **先检测已开则跳过点击**根治误关；③主席 per-leg **全程强制开**，总开关仅影响其他成员；④`thinkingActive` 作为新可点选角色纳入页内校准工具条。**下一步：逐站实机校准 `thinkingActivation` 多步 + `thinkingActive` 标志并复测**（已开跳过 / 未开开启 / 不误关）；随后 Phase 8 多轮辩论 Debate（待立 ADR-0014）。另：Phase 6 配置仓已接线 `leo-fengchao/delphi-config`，远程拉取生效。海外 3 家加载方式见下「海外站点」。
 
 ### 海外站点（ChatGPT / Claude / Gemini）的实测方式
 
@@ -252,6 +254,7 @@ ai-council-extension/
 - [ADR-0013](docs/adr/0013-crowdsourced-selector-sharing.md) · 众包共创：GitHub Issue 提交 + 维护者人工审核 + 远程回流分发（Phase 6）
 - ADR-0014 ·（计划）多轮辩论 Debate：主席对匿名成员定向追问、中枢路由映射、≤3 轮收敛（Phase 8，待立）
 - ADR-0015 ·（计划）UI 精调：概览方块 + 状态标识 + 弹窗详情 + 一键追问 + 历史侧栏（Phase 9，待立）
+- [ADR-0016](docs/adr/0016-default-deep-thinking.md) · 深度思考默认开启 + `thinkingActive` 状态检测避免误关 + 主席全程强制（Phase 7）
 
 ---
 

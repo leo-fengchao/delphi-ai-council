@@ -157,7 +157,9 @@ export async function driveLegResilient(
   hooks: BroadcastHooks,
 ): Promise<LegResult> {
   await patchLeg(session, adapter.id, { status: 'running', stage: undefined, error: undefined, code: undefined });
-  const options: DriveOptions = { enableThinking: session.enableThinking };
+  // 主席全程强制开启深度思考；其余成员跟随用户开关（Phase 7 / ADR-0016）。
+  const thinking = session.enableThinking || adapter.id === session.chairpersonId;
+  const options: DriveOptions = { enableThinking: thinking };
 
   for (let attempt = 0; attempt <= MAX_AUTO_RECOVER; attempt++) {
     // 1) 确保有一个活着的标签页（首跑沿用，丢失/续跑则重开）。

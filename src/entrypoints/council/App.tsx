@@ -31,7 +31,8 @@ export function App() {
   const [prompt, setPrompt] = useState('');
   const [legs, setLegs] = useState<Record<string, LegView>>({});
   const [askedPrompt, setAskedPrompt] = useState('');
-  const [enableThinking, setEnableThinking] = useState(false);
+  // 深度思考默认开启（Phase 7 / ADR-0016：议事质量基线）。此开关只影响非主席成员，主席全程强制开。
+  const [enableThinking, setEnableThinking] = useState(true);
   const [overrides, setOverrides] = useState<UserOverrides>({});
   const [calibratingId, setCalibratingId] = useState<string | null>(null);
   const [calibMsg, setCalibMsg] = useState('');
@@ -339,7 +340,7 @@ export function App() {
             onChange={(e) => setEnableThinking(e.target.checked)}
             style={{ marginRight: 6 }}
           />
-          深度思考（需先校准各站「深度思考开关」）
+          深度思考（默认开启；主席强制开，此开关仅影响其他成员。需先校准各站「深度思考」步骤与「思考已开·标志」）
         </label>
       </div>
 

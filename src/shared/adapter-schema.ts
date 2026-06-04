@@ -22,14 +22,21 @@ export interface AdapterSelectors {
   assistantMessage: string;
   /** 可选：流式光标 / 生成标记 */
   streamingIndicator?: string;
+  /**
+   * 可选：「深度思考当前已开启」的标志元素选择器（Phase 7 / ADR-0016）。
+   * 命中（存在且可见）即视为思考已开——发送前据此**跳过** thinkingActivation 的点击，
+   * 避免在站点记忆了上次开启状态时把它再点关（误关）。留空则退化为每次都点（尽力而为）。
+   */
+  thinkingActive?: string;
 }
 
 /**
  * 用户可视化校准（ADR-0009）里可被点选的「单元素角色」。
  * 与 AdapterSelectors 的单一选择器字段一一对应。
- * 注：深度思考开启可能需要多步点击，单独用 `thinkingActivation`（有序数组）表达，不在此列。
+ * 注：深度思考开启可能需要多步点击，单独用 `thinkingActivation`（有序数组）表达，不在此列；
+ *     而「思考已开」的判定是单元素，故 `thinkingActive` 作为可点选角色（Phase 7 / ADR-0016）。
  */
-export type PickRole = 'inputBox' | 'sendButton' | 'stopButton' | 'assistantMessage';
+export type PickRole = 'inputBox' | 'sendButton' | 'stopButton' | 'assistantMessage' | 'thinkingActive';
 
 /** 各可点选角色的中文名（用于校准 UI 引导文案）。 */
 export const PICK_ROLE_LABELS: Record<PickRole, string> = {
@@ -37,6 +44,7 @@ export const PICK_ROLE_LABELS: Record<PickRole, string> = {
   sendButton: '发送按钮',
   assistantMessage: '回答区',
   stopButton: '停止按钮',
+  thinkingActive: '思考已开·标志',
 };
 
 export interface AdapterInput {
