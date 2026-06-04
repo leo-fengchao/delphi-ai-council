@@ -90,7 +90,7 @@
     {
       "id": "qwen",
       "displayName": "通义千问",
-      "version": 4,
+      "version": 5,
       "matches": [
         "https://www.qianwen.com/*",
         "https://tongyi.aliyun.com/*",
@@ -100,7 +100,7 @@
       "selectors": {
         "inputBox": "div[role=\"textbox\"], div[contenteditable=\"true\"]",
         "sendButton": "button[aria-label=\"发送消息\"], button:has(use[*|href=\"#qwpcicon-sendChat\"])",
-        "stopButton": "button[aria-label=\"停止回答\"], div[class*=\"stop\"]",
+        "stopButton": "button[aria-label=\"停止回答\"]",
         "assistantMessage": ".qk-markdown"
       },
       "input": {

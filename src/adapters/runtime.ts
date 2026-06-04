@@ -253,12 +253,15 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
   };
   // 逐行注入：execCommand insertText 遇 \n 会停在第一行（实测 Gemini 只进首行 → 只发首句）。
   // 故按行 insertText、行间 insertParagraph，逐行喂入，规避「整段含换行只进第一行」。
-  const tryExecLines = () => {
+  // 必须 async 且**行间留拍**：密集同步 execCommand 会让 Gemini（Quill/Angular）渲染卡死；
+  // 加 40ms 间隔后实测注入完整、发送键点亮（2026-06-04 Claude-in-Chrome 验证）。
+  const tryExecLines = async () => {
     el.focus();
     const lines = text.split('\n');
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) document.execCommand('insertParagraph', false);
       if (lines[i]) document.execCommand('insertText', false, lines[i]!);
+      await delay(40);
     }
   };
   const trySetText = () => {
@@ -274,7 +277,7 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
     : [tryExecLines, tryExec, tryPaste, trySetText];
   for (const attempt of attempts) {
     clearEditor();
-    attempt();
+    await attempt(); // tryExecLines 为 async（行间留拍）；其余同步，await 无副作用
     if (await waitForInjected(el, text, 4000)) return; // 等注入到接近完整再返回（命中即停）
   }
 }

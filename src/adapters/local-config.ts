@@ -80,7 +80,7 @@ const kimi: SiteAdapter = {
 const qwen: SiteAdapter = {
   id: 'qwen',
   displayName: '通义千问',
-  version: 4,
+  version: 5,
   // 实测真实域名是 www.qianwen.com（旧 tongyi 域名会重定向到此），必须匹配它内容脚本才注入。
   matches: ['https://www.qianwen.com/*', 'https://tongyi.aliyun.com/*', 'https://www.tongyi.com/*'],
   newChatUrl: 'https://www.qianwen.com/',
@@ -89,7 +89,9 @@ const qwen: SiteAdapter = {
     inputBox: 'div[role="textbox"], div[contenteditable="true"]',
     // 优先 aria（2026-06 实测稳定），回退 <use xlink:href="#qwpcicon-sendChat"> 命名空间定位。
     sendButton: 'button[aria-label="发送消息"], button:has(use[*|href="#qwpcicon-sendChat"])',
-    stopButton: 'button[aria-label="停止回答"], div[class*="stop"]',
+    // 2026-06-04 Claude-in-Chrome 实测：生成中出现 button[aria-label="停止回答"]，生成完即消失（准确）。
+    // 去掉原宽泛的 div[class*="stop"]（易误匹配/噪声）。
+    stopButton: 'button[aria-label="停止回答"]',
     // 回答正文容器。
     assistantMessage: '.qk-markdown',
   },
