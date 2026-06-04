@@ -211,7 +211,7 @@
     {
       "id": "chatgpt",
       "displayName": "ChatGPT",
-      "version": 3,
+      "version": 4,
       "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
@@ -229,10 +229,10 @@
       },
       "thinkingActivation": [
         "#composer-plus-btn",
-        "//div[@role='menuitemradio']//*[text()='思考一下']"
+        "//div[@role='menuitemradio'][.//*[normalize-space(text())='思考一下']]"
       ],
       "thinkingState": {
-        "selector": "div.contain-inline-size[data-tone=\"accent\"]",
+        "selector": "//button[contains(@class,'__composer-pill') and contains(normalize-space(.),'思考')]",
         "on": {
           "kind": "present"
         }

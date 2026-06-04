@@ -251,6 +251,16 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
       new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }),
     );
   };
+  // 逐行注入：execCommand insertText 遇 \n 会停在第一行（实测 Gemini 只进首行 → 只发首句）。
+  // 故按行 insertText、行间 insertParagraph，逐行喂入，规避「整段含换行只进第一行」。
+  const tryExecLines = () => {
+    el.focus();
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) document.execCommand('insertParagraph', false);
+      if (lines[i]) document.execCommand('insertText', false, lines[i]!);
+    }
+  };
   const trySetText = () => {
     el.textContent = text;
     el.dispatchEvent(
@@ -258,7 +268,10 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
     );
   };
 
-  const attempts = preferPaste ? [tryPaste, tryExec, trySetText] : [tryExec, tryPaste, trySetText];
+  // 含换行的长文本优先走逐行注入；preferPaste 站点仍先试 paste（Kimi 等只认 paste）。
+  const attempts = preferPaste
+    ? [tryPaste, tryExecLines, tryExec, trySetText]
+    : [tryExecLines, tryExec, tryPaste, trySetText];
   for (const attempt of attempts) {
     clearEditor();
     attempt();

@@ -175,7 +175,7 @@ const yuanbao: SiteAdapter = {
 const chatgpt: SiteAdapter = {
   id: 'chatgpt',
   displayName: 'ChatGPT',
-  version: 3,
+  version: 4,
   matches: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
   newChatUrl: 'https://chatgpt.com/',
   selectors: {
@@ -192,13 +192,15 @@ const chatgpt: SiteAdapter = {
   // 关态输入框下方无任何指示物，开态才出现思考 chip → 用 presence 判别：
   // 选择器只匹配「开启态才出现的 accent chip」，存在即已开、不存在即未开（scan-all，不怕首个不是它）。
   // ⚠️ 选择器较通用，是最不稳的一个，实机验收重点核对；若误判改用更专属的 chip 选择器。
-  // ①点「+」菜单按钮；②选「思考一下」菜单项（2026-06-04 用户 XPath 校准，按文本命中，取代原超深正位选择器）。
+  // ①点「+」菜单按钮；②选「思考一下」。第二步必须点 menuitemradio 元素本身（点其内部文本 div 不触发选择）。
+  // 2026-06-04 经 Claude-in-Chrome 实机验证：aria-checked false→true、思考 chip 出现。
   thinkingActivation: [
     '#composer-plus-btn',
-    "//div[@role='menuitemradio']//*[text()='思考一下']",
+    "//div[@role='menuitemradio'][.//*[normalize-space(text())='思考一下']]",
   ],
+  // 思考开启后输入框下方出现文本含「思考」的 composer-pill；关态无此 pill。present 判别（实测开=1 关=0）。
   thinkingState: {
-    selector: 'div.contain-inline-size[data-tone="accent"]',
+    selector: "//button[contains(@class,'__composer-pill') and contains(normalize-space(.),'思考')]",
     on: { kind: 'present' },
   },
   completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 180000 },
