@@ -252,6 +252,8 @@ export function describeThinkingDiscriminator(d: ThinkingDiscriminator): string 
       return `文本含「${d.contains}」`;
     case 'style':
       return `样式 ${d.prop}: ${d.value}`;
+    case 'present':
+      return '元素出现即已开';
   }
 }
 

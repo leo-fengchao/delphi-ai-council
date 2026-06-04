@@ -186,15 +186,16 @@ const chatgpt: SiteAdapter = {
   },
   input: { method: 'execCommandInsertText', submit: 'enterKey' },
   // 深度思考（2026-06-04 实测）：「+」菜单 → 选「Think longer / 深度思考」。
-  // ⚠️ 关态无指示物、判别用通用类 div.contain-inline-size + data-tone=accent，定位可能抓错——
-  //    这是最不稳的一个，实机验收重点核对；若误判则按需重校准（找仅开启态才有的更专属元素）。
+  // 关态输入框下方无任何指示物，开态才出现思考 chip → 用 presence 判别：
+  // 选择器只匹配「开启态才出现的 accent chip」，存在即已开、不存在即未开（scan-all，不怕首个不是它）。
+  // ⚠️ 选择器较通用，是最不稳的一个，实机验收重点核对；若误判改用更专属的 chip 选择器。
   thinkingActivation: [
     '#composer-plus-btn',
     'div:nth-of-type(10) > div > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2)',
   ],
   thinkingState: {
-    selector: 'div.contain-inline-size',
-    on: { kind: 'attr', name: 'data-tone', value: 'accent' },
+    selector: 'div.contain-inline-size[data-tone="accent"]',
+    on: { kind: 'present' },
   },
   completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 180000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },

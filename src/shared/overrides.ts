@@ -133,6 +133,8 @@ function sanitizeThinkingState(raw: unknown): ThinkingStateCheck | undefined {
     case 'style':
       if (okStr(on.prop) && okStr(on.value)) return { selector: ts.selector, on };
       return undefined;
+    case 'present':
+      return { selector: ts.selector, on };
     default:
       return undefined;
   }

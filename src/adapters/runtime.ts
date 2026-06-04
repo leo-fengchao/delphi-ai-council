@@ -107,20 +107,16 @@ async function ensureThinkingOn(adapter: SiteAdapter): Promise<void> {
  */
 function isThinkingOn(state: ThinkingStateCheck): boolean {
   try {
-    const el = firstVisibleMatch(state.selector);
-    if (!el) return false;
-    return matchesDiscriminator(el, state.on);
+    // 扫描**所有**命中元素：任一「可见且满足判别式」即判已开。
+    // 不只看首个——否则当匹配元素不是首个、或关态根本没有该元素时会误判。
+    const els = document.querySelectorAll<HTMLElement>(state.selector);
+    for (const el of els) {
+      if (isVisible(el) && matchesDiscriminator(el, state.on)) return true;
+    }
+    return false;
   } catch {
     return false; // 选择器非法等：按未开处理（继续点击，尽力而为）
   }
-}
-
-function firstVisibleMatch(selector: string): HTMLElement | null {
-  const els = document.querySelectorAll<HTMLElement>(selector);
-  for (const el of els) {
-    if (isVisible(el)) return el;
-  }
-  return els.length > 0 ? els[0]! : null;
 }
 
 function matchesDiscriminator(el: HTMLElement, on: ThinkingStateCheck['on']): boolean {
@@ -133,6 +129,8 @@ function matchesDiscriminator(el: HTMLElement, on: ThinkingStateCheck['on']): bo
       return ((el.innerText ?? el.textContent ?? '').trim()).includes(on.contains);
     case 'style':
       return getComputedStyle(el).getPropertyValue(on.prop).trim() === on.value;
+    case 'present':
+      return true; // 元素已存在且可见（由调用处保证）即视为已开
     default:
       return false;
   }

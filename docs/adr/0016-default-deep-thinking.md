@@ -29,9 +29,12 @@ type ThinkingDiscriminator =
   | { kind: 'attr';  name: string; value: string }   // 属性变值，如 aria-pressed="true"
   | { kind: 'class'; value: string }                 // 开启时多出的 class，如 active
   | { kind: 'text';  contains: string }              // 文本含某子串，如「已开启」
-  | { kind: 'style'; prop: string; value: string };  // 计算样式变化，如 background-color（专治「只有背景色变」）
+  | { kind: 'style'; prop: string; value: string }   // 计算样式变化，如 background-color（专治「只有背景色变」）
+  | { kind: 'present' };                              // 元素存在即已开——治「关态无指示物、开态才出现某元素」（如 ChatGPT）
 interface ThinkingStateCheck { selector: string; on: ThinkingDiscriminator }
 ```
+
+**运行时按 scan-all 判定**：`isThinkingOn` 扫描选择器命中的**所有**可见元素，任一满足判别式即「已开」。不只看首个——否则当匹配元素非首个、或关态根本无该元素时会误判。`present` 判别专给「关态页面无任何元素、开态才出现 chip」的站点（两态 diff 推不出，需在配置里直接指定仅开启态命中的选择器）。
 
 - **校准（两步）**：在 `selectors.thinkingActive` 单选择器的旧法之外，工具条新增「思考状态(两态)」按钮——①思考为【关】时点选开关按钮 → 记快照 A（class/属性/文本/关键计算样式）；②切到【开】再点选同一按钮 → 记快照 B；`computeThinkingDiscriminator(A,B)` 按 `状态属性 > 其它 aria-*/data-* > 新增 class > 文本 > 计算样式` 的优先级取出**真正变化的那一项**。定位选择器取自「关」态（两态都能命中）。
 - **运行时** `ensureThinkingOn`（`runtime.ts`）：发送前定位元素并按判别式核验——已开 → **跳过点击**（杜绝误关）；未开 → 按 `thinkingActivation` 逐步点击，每步后若判定已开则**提前结束**。

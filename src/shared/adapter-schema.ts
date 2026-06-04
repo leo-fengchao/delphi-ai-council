@@ -53,7 +53,13 @@ export type ThinkingDiscriminator =
   /** 文本包含该子串（如「已开启」） */
   | { kind: 'text'; contains: string }
   /** 计算样式某属性等于该值（如 background-color: rgb(...)）——专治「只有背景色变」 */
-  | { kind: 'style'; prop: string; value: string };
+  | { kind: 'style'; prop: string; value: string }
+  /**
+   * 元素「存在且可见」即视为已开（presence）——专治「关态页面无任何指示物、开态才出现某元素」
+   * 的站点（如 ChatGPT：思考关闭时输入框下方什么都没有，开启后才出现思考 chip）。
+   * 此判别由两态 diff 推不出（关态无元素可点选），需在配置里直接指定一个仅开启态才命中的选择器。
+   */
+  | { kind: 'present' };
 
 export interface ThinkingStateCheck {
   /** 定位「思考开关」元素的稳健选择器（取自校准的「关」态，两态都能命中） */
