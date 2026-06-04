@@ -14,6 +14,7 @@ import type {
   PickRole,
   SiteAdapter,
   SubmitMethod,
+  ThinkingStateCheck,
 } from './adapter-schema';
 
 /** 单站点的覆盖项：被校准过的角色选择器 + 可选的注入/发送策略。 */
@@ -22,6 +23,8 @@ export interface SiteOverride {
   selectors?: Partial<Record<PickRole, string>>;
   /** 用户录制的「深度思考」开启步骤（有序，多步），ADR-0009 */
   thinkingActivation?: string[];
+  /** 用户校准出的「深度思考已开」判定（定位选择器 + 两态 diff 判别式），Phase 7 / ADR-0016 */
+  thinkingState?: ThinkingStateCheck;
   /** 可选：覆盖注入方式 / 发送方式 */
   inputMethod?: InputMethod;
   submit?: SubmitMethod;
@@ -73,6 +76,7 @@ export async function importOverrides(
       ...site,
       selectors: { ...prev?.selectors, ...site.selectors },
       thinkingActivation: site.thinkingActivation ?? prev?.thinkingActivation,
+      thinkingState: site.thinkingState ?? prev?.thinkingState,
       updatedAt: Date.now(),
     };
   }
@@ -99,11 +103,59 @@ function sanitizeOverrides(raw: unknown): UserOverrides {
       const steps = site.thinkingActivation.filter((s): s is string => typeof s === 'string' && !!s);
       if (steps.length) o.thinkingActivation = steps;
     }
+    const ts = sanitizeThinkingState(site.thinkingState);
+    if (ts) o.thinkingState = ts;
     if (site.inputMethod) o.inputMethod = site.inputMethod;
     if (site.submit) o.submit = site.submit;
-    if (o.selectors || o.thinkingActivation || o.inputMethod || o.submit) out[id] = o;
+    if (o.selectors || o.thinkingActivation || o.thinkingState || o.inputMethod || o.submit) out[id] = o;
   }
   return out;
+}
+
+/** 校验「思考已开」判定结构合法（定位选择器是字符串 + 判别式为四类之一），否则丢弃。 */
+function sanitizeThinkingState(raw: unknown): ThinkingStateCheck | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const ts = raw as Partial<ThinkingStateCheck>;
+  if (typeof ts.selector !== 'string' || !ts.selector) return undefined;
+  const on = ts.on as ThinkingStateCheck['on'] | undefined;
+  if (!on || typeof on !== 'object') return undefined;
+  const okStr = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+  switch (on.kind) {
+    case 'attr':
+      if (okStr(on.name) && typeof on.value === 'string') return { selector: ts.selector, on };
+      return undefined;
+    case 'class':
+      if (okStr(on.value)) return { selector: ts.selector, on };
+      return undefined;
+    case 'text':
+      if (okStr(on.contains)) return { selector: ts.selector, on };
+      return undefined;
+    case 'style':
+      if (okStr(on.prop) && okStr(on.value)) return { selector: ts.selector, on };
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** 写入某站点的「深度思考已开」判定（整体覆盖）。传 undefined 等同清除该项。 */
+export async function writeThinkingState(
+  adapterId: string,
+  state: ThinkingStateCheck | undefined,
+): Promise<void> {
+  const all = await readAllOverrides();
+  const prev = all[adapterId];
+  const clean = sanitizeThinkingState(state);
+  if (!clean) {
+    if (prev) {
+      delete prev.thinkingState;
+      prev.updatedAt = Date.now();
+      if (!hasAnyOverride(prev)) delete all[adapterId];
+    }
+  } else {
+    all[adapterId] = { ...prev, thinkingState: clean, updatedAt: Date.now() };
+  }
+  await chrome.storage.local.set({ [OVERRIDES_KEY]: all });
 }
 
 /** 写入某站点某角色的选择器（合并进既有覆盖项）。 */
@@ -143,6 +195,7 @@ function hasAnyOverride(o: SiteOverride): boolean {
   return (
     (o.selectors != null && Object.keys(o.selectors).length > 0) ||
     (o.thinkingActivation != null && o.thinkingActivation.length > 0) ||
+    o.thinkingState != null ||
     o.inputMethod != null ||
     o.submit != null
   );
@@ -188,6 +241,7 @@ export function applyOverride(adapter: SiteAdapter, override?: SiteOverride): Si
       override.thinkingActivation && override.thinkingActivation.length > 0
         ? override.thinkingActivation
         : adapter.thinkingActivation,
+    thinkingState: override.thinkingState ?? adapter.thinkingState,
     input: {
       method: override.inputMethod ?? adapter.input.method,
       submit: override.submit ?? adapter.input.submit,

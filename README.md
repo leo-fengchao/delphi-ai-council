@@ -189,10 +189,10 @@ ai-council-extension/
 ### Phase 7 · 深度思考默认开启（议事质量基线，ADR-0016）· 进行中
 > 动机：既然已动用「集思」，就应让每个模型拿出最深思熟虑的回答，再进入完善的评审/辩论，最终结论才有意义。深度思考是议事质量的基线，故**默认开启**。
 - [x] 全员默认开启深度思考：Council Page「深度思考」开关初值为开；发送前按 `thinkingActivation` 步骤置为「开」
-- [x] 依赖前置·稳定性修复：新增可校准的 `selectors.thinkingActive`（命中=已开），运行时 `ensureThinkingOn` **先检测已开则跳过点击**（杜绝误关），未开才逐步点击、命中即提前结束（`runtime.ts`）
+- [x] 依赖前置·稳定性修复：新增 `thinkingState`（定位选择器 + 判别式），由校准时「关→开」两态 diff 自动推导，覆盖 属性/class/文本/背景色 四类区别（解决"同一按钮只变色/变字、单选择器分不清两态"）；运行时 `ensureThinkingOn` **先判定已开则跳过点击**（杜绝误关），未开才逐步点击、命中即提前结束（`runtime.ts`）
 - [x] 主席模型深度思考**强制开启**：per-leg 控制 `enableThinking || adapterId===chairpersonId`，主席阶段一/三恒开，总开关仅影响其他成员（`orchestrator.ts`）
-- [x] 校准接入：`thinkingActive` 作为新可点选角色（「思考已开·标志」）纳入页内校准工具条
-- [ ] **实机联调**：逐站校准 `thinkingActivation` 多步 + `thinkingActive` 标志 → 验证已开跳过、未开开启、不再误关
+- [x] 校准接入：工具条新增「思考状态(两态)」录制（`pickElementSnapshot` 两态快照 + `computeThinkingDiscriminator` 自动 diff）；`thinkingState` 接入覆盖层/贡献/合并通路
+- [ ] **实机联调**：逐站录「深度思考(多步)」+「思考状态(两态)」→ 验证已开跳过、未开开启、不再误关
 - [ ] （低优先级）用户级「关闭深度思考」开关仅作用于非主席成员；主席仍强制开。初版默认全开，此项可后置
 
 ### Phase 8 · 多轮辩论 Debate（≤3 轮，待立 ADR-0014）
@@ -219,7 +219,7 @@ ai-council-extension/
 
 **后台渲染问题（关键，已定方案 ADR-0010）：** 后台/非激活标签页里浏览器会暂停 `requestAnimationFrame`、拒绝 `focus()`、不渲染虚拟列表 → 注入/点击/抽取全部失败（切到前台才正常）。`visibility.content.ts` 的可见性伪装只能骗过站点自身的 `document.hidden` 暂停，盖不住内核层限制。**采用方案：每站一窗、并排平铺**（`council-tabs.ts`），让每个站点的标签页都「激活且可见」从而真正渲染。代价是占屏；更省屏的渲染保活为优化项（见 roadmap）。
 
-**Current Focus：** Phase 7 深度思考默认开启已完成代码（构建/类型检查通过，待实机联调）。要点（ADR-0016）：①开关默认开；②新增可校准的 `selectors.thinkingActive`（命中=已开），运行时 `ensureThinkingOn` **先检测已开则跳过点击**根治误关；③主席 per-leg **全程强制开**，总开关仅影响其他成员；④`thinkingActive` 作为新可点选角色纳入页内校准工具条。**下一步：逐站实机校准 `thinkingActivation` 多步 + `thinkingActive` 标志并复测**（已开跳过 / 未开开启 / 不误关）；随后 Phase 8 多轮辩论 Debate（待立 ADR-0014）。另：Phase 6 配置仓已接线 `leo-fengchao/delphi-config`，远程拉取生效。海外 3 家加载方式见下「海外站点」。
+**Current Focus：** Phase 7 深度思考默认开启已完成代码（构建/类型检查通过，待实机联调）。要点（ADR-0016）：①开关默认开；②新增 `thinkingState`（定位选择器 + 判别式），由校准时「关→开」两态 diff 自动推导，覆盖 属性/class/文本/背景色 四类区别——根治"同一按钮只变色/变字、单选择器分不清两态、再点反而误关"；运行时 `ensureThinkingOn` 先判定已开则跳过点击；③主席 per-leg **全程强制开**，总开关仅影响其他成员；④校准工具条新增「思考状态(两态)」录制。**下一步：逐站录「深度思考(多步)」+「思考状态(两态)」并复测**（已开跳过 / 未开开启 / 不误关）；随后 Phase 8 多轮辩论 Debate（待立 ADR-0014）。另：Phase 6 配置仓已接线 `leo-fengchao/delphi-config`，远程拉取生效。海外 3 家加载方式见下「海外站点」。
 
 ### 海外站点（ChatGPT / Claude / Gemini）的实测方式
 

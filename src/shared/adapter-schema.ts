@@ -22,21 +22,15 @@ export interface AdapterSelectors {
   assistantMessage: string;
   /** 可选：流式光标 / 生成标记 */
   streamingIndicator?: string;
-  /**
-   * 可选：「深度思考当前已开启」的标志元素选择器（Phase 7 / ADR-0016）。
-   * 命中（存在且可见）即视为思考已开——发送前据此**跳过** thinkingActivation 的点击，
-   * 避免在站点记忆了上次开启状态时把它再点关（误关）。留空则退化为每次都点（尽力而为）。
-   */
-  thinkingActive?: string;
 }
 
 /**
  * 用户可视化校准（ADR-0009）里可被点选的「单元素角色」。
  * 与 AdapterSelectors 的单一选择器字段一一对应。
  * 注：深度思考开启可能需要多步点击，单独用 `thinkingActivation`（有序数组）表达，不在此列；
- *     而「思考已开」的判定是单元素，故 `thinkingActive` 作为可点选角色（Phase 7 / ADR-0016）。
+ *     「思考是否已开」的判定需区分同一按钮的两态差异，单独用 `thinkingState`（定位选择器 + 判别式），亦不在此列。
  */
-export type PickRole = 'inputBox' | 'sendButton' | 'stopButton' | 'assistantMessage' | 'thinkingActive';
+export type PickRole = 'inputBox' | 'sendButton' | 'stopButton' | 'assistantMessage';
 
 /** 各可点选角色的中文名（用于校准 UI 引导文案）。 */
 export const PICK_ROLE_LABELS: Record<PickRole, string> = {
@@ -44,8 +38,29 @@ export const PICK_ROLE_LABELS: Record<PickRole, string> = {
   sendButton: '发送按钮',
   assistantMessage: '回答区',
   stopButton: '停止按钮',
-  thinkingActive: '思考已开·标志',
 };
+
+/**
+ * 「深度思考已开」的判别式（Phase 7 / ADR-0016）。
+ * 很多站点的思考开/关是**同一个按钮、同一条 DOM 路径**，区别只在 属性值 / class / 文本 / 背景色 等；
+ * 单凭「选择器能否命中」无法区分两态。故由校准时「关→开」两态快照自动 diff 出**真正变化的那一项**作为判别式。
+ */
+export type ThinkingDiscriminator =
+  /** 某属性变为该值（如 aria-pressed="true"、data-state="active"）——最稳 */
+  | { kind: 'attr'; name: string; value: string }
+  /** 开启时多出的 class（如 active / selected） */
+  | { kind: 'class'; value: string }
+  /** 文本包含该子串（如「已开启」） */
+  | { kind: 'text'; contains: string }
+  /** 计算样式某属性等于该值（如 background-color: rgb(...)）——专治「只有背景色变」 */
+  | { kind: 'style'; prop: string; value: string };
+
+export interface ThinkingStateCheck {
+  /** 定位「思考开关」元素的稳健选择器（取自校准的「关」态，两态都能命中） */
+  selector: string;
+  /** 判定「已开」的判别式（由两态差异自动推导） */
+  on: ThinkingDiscriminator;
+}
 
 export interface AdapterInput {
   method: InputMethod;
@@ -97,6 +112,12 @@ export interface SiteAdapter {
    * 运行时按序「等待元素出现 → 点击 → 略等」，发送前执行（仅当用户勾选了深度思考）。
    */
   thinkingActivation?: string[];
+  /**
+   * 可选：「深度思考是否已开」的判定（Phase 7 / ADR-0016）。
+   * 发送前据此检测：已开则跳过 thinkingActivation 点击（杜绝误关），未开才点。
+   * 由校准时「关→开」两态差异自动推导，覆盖 属性/class/文本/背景色 四类区别。留空则退化为每次都点。
+   */
+  thinkingState?: ThinkingStateCheck;
   completion: AdapterCompletion;
   extraction: AdapterExtraction;
   auth?: AdapterAuth;

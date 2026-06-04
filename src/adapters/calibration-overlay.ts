@@ -7,10 +7,23 @@
  */
 
 import { PICK_ROLE_LABELS, type PickRole } from '../shared/adapter-schema';
-import { pickElement, pickSequence, type PickKind } from './picker';
-import { writeRoleSelector, writeThinkingActivation, readSiteOverride } from '../shared/overrides';
+import {
+  pickElement,
+  pickElementSnapshot,
+  pickSequence,
+  computeThinkingDiscriminator,
+  describeThinkingDiscriminator,
+  type PickKind,
+  type SnapshotOutcome,
+} from './picker';
+import {
+  writeRoleSelector,
+  writeThinkingActivation,
+  writeThinkingState,
+  readSiteOverride,
+} from '../shared/overrides';
 
-const ROLES: PickRole[] = ['inputBox', 'sendButton', 'assistantMessage', 'stopButton', 'thinkingActive'];
+const ROLES: PickRole[] = ['inputBox', 'sendButton', 'assistantMessage', 'stopButton'];
 
 /** 角色 → 拾取种类（决定元素归一化与选择器策略）。 */
 const ROLE_KIND: Record<PickRole, PickKind> = {
@@ -18,8 +31,6 @@ const ROLE_KIND: Record<PickRole, PickKind> = {
   sendButton: 'clickable',
   stopButton: 'clickable',
   assistantMessage: 'content',
-  // 「思考已开」标志：点选当深度思考为开启态时才出现/高亮的元素（Phase 7 / ADR-0016）。
-  thinkingActive: 'clickable',
 };
 
 /** 注入工具条；用户点「完成校准」时 resolve。 */
@@ -29,6 +40,9 @@ export async function runCalibrationToolbar(adapterId: string, displayName: stri
     existing?.selectors ? (Object.keys(existing.selectors) as PickRole[]) : [],
   );
   let thinkingCount = existing?.thinkingActivation?.length ?? 0;
+  let hasState = !!existing?.thinkingState;
+  /** 「思考状态(两态)」录制：第一步记录的「关」态快照（待第二步「开」态点选后 diff）。 */
+  let pendingOff: SnapshotOutcome | null = null;
   let busy = false;
 
   const bar = document.createElement('div');
@@ -149,6 +163,46 @@ export async function runCalibrationToolbar(adapterId: string, displayName: stri
   });
   bar.appendChild(thinkBtn);
 
+  // 「思考状态(两态)」：录「关」态 → 录「开」态 → 自动 diff 出判别式（Phase 7 / ADR-0016）。
+  const stateBtn = mkBtn(stateLabel(hasState, pendingOff));
+  stateBtn.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true;
+    if (!pendingOff) {
+      setStatus('①先把该站「深度思考」切到【关】，再点选那个「思考开关」按钮（点选不会真的触发它）。');
+      bar.style.display = 'none';
+      const off = await pickElementSnapshot({ label: '思考开关·关闭态', kind: 'clickable' });
+      bar.style.display = 'flex';
+      if (off.ok && off.signature) {
+        pendingOff = off;
+        setStatus('已记录【关】态。②现在到页面把「深度思考」切到【开】，然后再点本按钮录「开」态。');
+      } else {
+        setStatus(`未完成：${off.error ?? '未取到状态签名'}`);
+      }
+    } else {
+      setStatus('②点选同一个「思考开关」按钮（此刻应为开启态）。');
+      bar.style.display = 'none';
+      const on = await pickElementSnapshot({ label: '思考开关·开启态', kind: 'clickable' });
+      bar.style.display = 'flex';
+      if (on.ok && on.signature && pendingOff.signature && pendingOff.selector) {
+        const disc = computeThinkingDiscriminator(pendingOff.signature, on.signature);
+        if (disc) {
+          await writeThinkingState(adapterId, { selector: pendingOff.selector, on: disc });
+          hasState = true;
+          setStatus(`✅ 思考状态判别：${describeThinkingDiscriminator(disc)}`);
+        } else {
+          setStatus('未检测到两态差异：请确认两次点的是同一按钮、且①确为关、②确为开，再重录。');
+        }
+      } else {
+        setStatus(`未完成：${on.error ?? '未取到状态签名'}`);
+      }
+      pendingOff = null;
+    }
+    stateBtn.textContent = stateLabel(hasState, pendingOff);
+    busy = false;
+  });
+  bar.appendChild(stateBtn);
+
   bar.appendChild(status);
 
   return new Promise<void>((resolve) => {
@@ -171,6 +225,12 @@ function roleLabel(role: PickRole, done: Set<PickRole>): string {
 
 function thinkLabel(count: number): string {
   return `深度思考(多步)${count ? ` ✓${count}` : ''}`;
+}
+
+function stateLabel(hasState: boolean, pendingOff: SnapshotOutcome | null): string {
+  if (pendingOff) return '思考状态：②录【开】态';
+  if (hasState) return '思考状态 ✓（重录）';
+  return '思考状态：①录【关】态';
 }
 
 function mkBtn(text: string, bg = '#2a2e38'): HTMLButtonElement {

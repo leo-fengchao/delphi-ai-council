@@ -340,7 +340,7 @@ export function App() {
             onChange={(e) => setEnableThinking(e.target.checked)}
             style={{ marginRight: 6 }}
           />
-          深度思考（默认开启；主席强制开，此开关仅影响其他成员。需先校准各站「深度思考」步骤与「思考已开·标志」）
+          深度思考（默认开启；主席强制开，此开关仅影响其他成员。需先在校准里录「深度思考(多步)」与「思考状态(两态)」）
         </label>
       </div>
 
@@ -358,10 +358,13 @@ export function App() {
           {config.adapters.map((a) => {
             const roles = overriddenRoles(a.id);
             const thinkSteps = overrides[a.id]?.thinkingActivation?.length ?? 0;
+            const hasState = !!overrides[a.id]?.thinkingState;
+            const hasAny = roles.length > 0 || thinkSteps > 0 || hasState;
             const active = calibratingId === a.id;
             const tags = [
               ...roles.map((r) => PICK_ROLE_LABELS[r]),
               ...(thinkSteps ? [`深度思考(${thinkSteps}步)`] : []),
+              ...(hasState ? ['思考状态判别'] : []),
             ];
             return (
               <div key={a.id} style={styles.calibRow}>
@@ -377,12 +380,12 @@ export function App() {
                       校准
                     </button>
                   )}
-                  {(roles.length > 0 || thinkSteps > 0) && !active && COMMUNITY_REPO && (
+                  {hasAny && !active && COMMUNITY_REPO && (
                     <button style={styles.smallBtn} title="把此校准提交到社区，审核后所有用户受益" onClick={() => doContribute(a)}>
                       贡献
                     </button>
                   )}
-                  {(roles.length > 0 || thinkSteps > 0) && !active && (
+                  {hasAny && !active && (
                     <button style={styles.resetBtn} onClick={() => resetSite(a)}>
                       重置
                     </button>

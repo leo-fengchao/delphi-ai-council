@@ -10,7 +10,7 @@
  * 注意：此处的 sanitize 仅为降噪，**真正的安全闸是维护者人工审核**（客户端代码可被绕过）。
  */
 
-import { PICK_ROLE_LABELS, type InputMethod, type PickRole, type SiteAdapter, type SubmitMethod } from './adapter-schema';
+import { PICK_ROLE_LABELS, type InputMethod, type PickRole, type SiteAdapter, type SubmitMethod, type ThinkingStateCheck } from './adapter-schema';
 import type { SiteOverride } from './overrides';
 
 /**
@@ -47,6 +47,7 @@ export interface ContributionPayload {
 export interface CleanOverride {
   selectors?: Partial<Record<PickRole, string>>;
   thinkingActivation?: string[];
+  thinkingState?: ThinkingStateCheck;
   inputMethod?: InputMethod;
   submit?: SubmitMethod;
 }
@@ -57,6 +58,7 @@ export function hasContributableOverride(override?: SiteOverride): boolean {
   return Boolean(
     (override.selectors && Object.keys(override.selectors).length > 0) ||
       (override.thinkingActivation && override.thinkingActivation.length > 0) ||
+      override.thinkingState ||
       override.inputMethod ||
       override.submit,
   );
@@ -78,6 +80,7 @@ export function sanitizeForContribution(override: SiteOverride): CleanOverride {
     );
     if (steps.length) out.thinkingActivation = steps;
   }
+  if (override.thinkingState) out.thinkingState = override.thinkingState;
   if (override.inputMethod) out.inputMethod = override.inputMethod;
   if (override.submit) out.submit = override.submit;
   return out;
@@ -170,6 +173,14 @@ export function diffOverride(adapter: SiteAdapter, override: SiteOverride): { di
       identicalKeys.push('深度思考');
     } else {
       diff.thinkingActivation = clean.thinkingActivation;
+    }
+  }
+
+  if (clean.thinkingState) {
+    if (JSON.stringify(clean.thinkingState) === JSON.stringify(adapter.thinkingState ?? null)) {
+      identicalKeys.push('思考状态判别');
+    } else {
+      diff.thinkingState = clean.thinkingState;
     }
   }
 

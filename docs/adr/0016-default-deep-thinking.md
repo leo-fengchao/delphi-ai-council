@@ -19,12 +19,24 @@ ADR-0009 把「深度思考开启」建模为可校准的有序点击步骤 `thi
 - Council Page 的「深度思考」开关初值为**开**。议事默认让全员开启深度思考。
 
 ### 2. 状态检测避免误关（核心可靠性修复）
-- 适配器新增可选、可远程热更新、可用户校准的选择器 `selectors.thinkingActive`：**命中（存在且可见）即表示深度思考当前已开**。
-- 运行时 `ensureThinkingOn`（`runtime.ts`）：发送前先用 `thinkingActive` 检测——
-  - 已开 → **跳过** `thinkingActivation` 点击（杜绝误关）；
-  - 未开 → 按 `thinkingActivation` 序列逐步点击；每步点击后若检测到已开则**提前结束**剩余步骤。
-- `thinkingActive` 未配置时退化为「每次都点」（与改动前一致，尽力而为，不阻断主流程）。
-- 校准支持：`thinkingActive` 作为新的可点选角色 `PickRole`（中文「思考已开·标志」），纳入页内校准工具条（`calibration-overlay.ts`），与既有「输入框/发送按钮/回答区/停止按钮」一致的校准管线（`writeRoleSelector` → 本地覆盖 → `applyOverride` 合并）。
+
+**问题**：很多站点的思考开/关是**同一个按钮、同一条 DOM 路径**，区别只在「背景色变了 / class 变了 / `aria-pressed` 变了 / 按钮文字变了」。单凭一个「选择器能否命中」无法区分两态——按钮一直在，会永远判「已开」→ 永远跳过点击 → 思考实际从未打开。**单个 selector 拿不到「前后区别」**。
+
+**方案**：把「思考已开」从"一个选择器"升级为 `thinkingState = { 定位选择器, 判别式 }`，判别式由校准时「关→开」两态快照**自动 diff** 得出，覆盖四类信号：
+
+```ts
+type ThinkingDiscriminator =
+  | { kind: 'attr';  name: string; value: string }   // 属性变值，如 aria-pressed="true"
+  | { kind: 'class'; value: string }                 // 开启时多出的 class，如 active
+  | { kind: 'text';  contains: string }              // 文本含某子串，如「已开启」
+  | { kind: 'style'; prop: string; value: string };  // 计算样式变化，如 background-color（专治「只有背景色变」）
+interface ThinkingStateCheck { selector: string; on: ThinkingDiscriminator }
+```
+
+- **校准（两步）**：在 `selectors.thinkingActive` 单选择器的旧法之外，工具条新增「思考状态(两态)」按钮——①思考为【关】时点选开关按钮 → 记快照 A（class/属性/文本/关键计算样式）；②切到【开】再点选同一按钮 → 记快照 B；`computeThinkingDiscriminator(A,B)` 按 `状态属性 > 其它 aria-*/data-* > 新增 class > 文本 > 计算样式` 的优先级取出**真正变化的那一项**。定位选择器取自「关」态（两态都能命中）。
+- **运行时** `ensureThinkingOn`（`runtime.ts`）：发送前定位元素并按判别式核验——已开 → **跳过点击**（杜绝误关）；未开 → 按 `thinkingActivation` 逐步点击，每步后若判定已开则**提前结束**。
+- `thinkingState` 未配置时退化为「每次都点」（与改动前一致，尽力而为，不阻断主流程）。
+- 数据通路：`thinkingState` 进入本地覆盖（`overrides.ts`，`writeThinkingState`）、`applyOverride` 合并、贡献 payload（`contribution.ts`），与既有选择器一样可校准 / 可远程热更新 / 可众包。判别式只是结构化的字符串，仍无可执行代码（延续 ADR-0005 安全约束）。
 
 ### 3. 主席全程强制开启（per-leg 控制）
 - 单腿驱动按 `session.enableThinking || adapterId === session.chairpersonId` 计算该腿是否开启思考（`orchestrator.driveLegResilient`）。
@@ -38,6 +50,7 @@ ADR-0009 把「深度思考开启」建模为可校准的有序点击步骤 `thi
 - `thinkingActive` 是纯选择器数据：可远程热更新（ADR-0008）、可用户校准（ADR-0009）、可众包共创（ADR-0013），与既有体系一致。
 
 **代价 / 妥协：**
-- `thinkingActive` 与多步 `thinkingActivation` 都需**各站实机校准**才稳；未校准的站点退化为旧行为（可能误关）。这是 Phase 7「实机联调」遗留项。
+- `thinkingState`（两态判别）与多步 `thinkingActivation` 都需**各站实机校准**才稳；未校准的站点退化为旧行为（每次都点，可能误关）。这是 Phase 7「实机联调」遗留项。
+- 判别式取自计算样式时（背景色等）相对脆弱：站点换肤/主题变量变更可能使其失效，需重校准；属性/class/文本类判别更稳，故 diff 时已按此优先级排序。
 - 默认开启会增加各家单次作答耗时（深度思考更慢）——属议事质量与速度的有意取舍，符合产品定位。
 - 全自动点击思考开关仍属 DOM 自动化，延续 ADR-0001/0007 的 ToS 风险面，不额外放大（仅多一两次点击）。

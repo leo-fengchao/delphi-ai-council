@@ -10,6 +10,8 @@
  * nth-of-type）。回答区（generalize=true）走「语义类」优先，使其能匹配未来每一条回答而非锁死一条。
  */
 
+import type { ThinkingDiscriminator } from '../shared/adapter-schema';
+
 const HIGHLIGHT_ID = 'delphi-pick-highlight';
 const BANNER_ID = 'delphi-pick-banner';
 
@@ -18,6 +20,24 @@ export interface PickOutcome {
   selector?: string;
   error?: string;
 }
+
+/** 元素「状态签名」：用于「关→开」两态 diff，推导「思考已开」判别式（Phase 7 / ADR-0016）。 */
+export interface ElementSignature {
+  classes: string[];
+  attrs: Record<string, string>;
+  text: string;
+  styles: Record<string, string>;
+}
+
+export interface SnapshotOutcome {
+  ok: boolean;
+  selector?: string;
+  signature?: ElementSignature;
+  error?: string;
+}
+
+/** 参与两态对比的计算样式属性（含用户提到的「只有背景色变」）。 */
+const SIGNATURE_STYLE_PROPS = ['background-color', 'color', 'border-color', 'font-weight', 'opacity'];
 
 /**
  * 拾取目标的「种类」，决定如何把用户点中的元素归一化、以及生成何种选择器：
@@ -93,6 +113,146 @@ export function pickElement(opts: PickOptions): Promise<PickOutcome> {
     document.addEventListener('pointerdown', swallow, true);
     document.addEventListener('keydown', onKey, true);
   });
+}
+
+/**
+ * 与 pickElement 相同的点选流程，但额外返回所选（归一化后）元素的**状态签名**，
+ * 供「思考已开」两态 diff 用（Phase 7 / ADR-0016）。点选不会真正触发站点点击（capture 拦截）。
+ */
+export function pickElementSnapshot(opts: PickOptions): Promise<SnapshotOutcome> {
+  const { label, kind } = opts;
+  return new Promise((resolve) => {
+    const highlight = createHighlight();
+    const banner = createBanner(`请点击该站点的「${label}」　（Esc 取消）`);
+    document.body.appendChild(highlight);
+    document.body.appendChild(banner);
+
+    let current: Element | null = null;
+
+    const onMove = (e: MouseEvent) => {
+      const el = elementUnder(e, highlight, banner);
+      current = el;
+      if (el) positionHighlight(highlight, el);
+    };
+
+    const onClick = (e: MouseEvent) => {
+      const el = elementUnder(e, highlight, banner) ?? current;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (!el) return;
+      cleanup();
+      const selector = buildRobustSelector(el, kind);
+      if (!selector) {
+        resolve({ ok: false, error: '无法为该元素生成选择器，请换一个更具体的元素' });
+        return;
+      }
+      const target = normalizeTarget(el, kind);
+      resolve({ ok: true, selector, signature: captureSignature(target) });
+    };
+
+    const swallow = (e: Event) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup();
+        resolve({ ok: false, error: '已取消校准' });
+      }
+    };
+
+    function cleanup() {
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('click', onClick, true);
+      document.removeEventListener('mousedown', swallow, true);
+      document.removeEventListener('pointerdown', swallow, true);
+      document.removeEventListener('keydown', onKey, true);
+      highlight.remove();
+      banner.remove();
+    }
+
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('mousedown', swallow, true);
+    document.addEventListener('pointerdown', swallow, true);
+    document.addEventListener('keydown', onKey, true);
+  });
+}
+
+/** 捕捉元素的状态签名（class / 属性 / 文本 / 关键计算样式）。 */
+function captureSignature(el: Element): ElementSignature {
+  const attrs: Record<string, string> = {};
+  for (const a of Array.from(el.attributes)) attrs[a.name] = a.value;
+  const styles: Record<string, string> = {};
+  try {
+    const cs = getComputedStyle(el as HTMLElement);
+    for (const p of SIGNATURE_STYLE_PROPS) styles[p] = cs.getPropertyValue(p).trim();
+  } catch {
+    /* 某些元素取不到计算样式：忽略 */
+  }
+  const text = ((el as HTMLElement).innerText ?? el.textContent ?? '').trim().slice(0, 80);
+  return { classes: Array.from(el.classList), attrs, text, styles };
+}
+
+/** 优先用于判定「已开」的状态属性（出现/变值最能代表开启态）。 */
+const STATE_ATTRS = [
+  'aria-pressed', 'aria-checked', 'aria-selected', 'aria-expanded',
+  'data-state', 'data-active', 'data-selected', 'data-checked', 'data-on',
+  'checked', 'selected',
+];
+
+/**
+ * 由「关」「开」两态签名 diff 出「已开」判别式（Phase 7 / ADR-0016）。
+ * 优先级：状态属性 > 其它 aria- / data- 属性 > 新增 class > 文本变化 > 计算样式（背景色等）。
+ * 无任何差异时返回 null（校准侧据此提示用户两态无区别）。
+ */
+export function computeThinkingDiscriminator(
+  off: ElementSignature,
+  on: ElementSignature,
+): ThinkingDiscriminator | null {
+  // 1) 优先的状态属性
+  for (const name of STATE_ATTRS) {
+    const onv = on.attrs[name];
+    if (onv !== undefined && onv !== off.attrs[name]) return { kind: 'attr', name, value: onv };
+  }
+  // 1b) 其它 aria-*/data-* 属性变化（限状态语义命名以降噪）
+  for (const [name, onv] of Object.entries(on.attrs)) {
+    if ((name.startsWith('aria-') || name.startsWith('data-')) && onv !== off.attrs[name]) {
+      return { kind: 'attr', name, value: onv };
+    }
+  }
+  // 2) 新增 class（偏好语义化的「开启」类）
+  const offClasses = new Set(off.classes);
+  const added = on.classes.filter((c) => !offClasses.has(c));
+  if (added.length) {
+    const pref = added.find((c) => /(^|-)(active|selected|checked|enabled?|on|open|expanded?|highlight)($|-)/i.test(c));
+    return { kind: 'class', value: pref ?? added[0]! };
+  }
+  // 3) 文本变化（如「深度思考」→「已开启」）
+  if (on.text && on.text !== off.text) return { kind: 'text', contains: on.text };
+  // 4) 计算样式变化（背景色等）
+  for (const prop of SIGNATURE_STYLE_PROPS) {
+    const onv = on.styles[prop];
+    if (onv && onv !== off.styles[prop]) return { kind: 'style', prop, value: onv };
+  }
+  return null;
+}
+
+/** 判别式的中文描述（校准 UI 反馈用）。 */
+export function describeThinkingDiscriminator(d: ThinkingDiscriminator): string {
+  switch (d.kind) {
+    case 'attr':
+      return `属性 ${d.name}="${d.value}"`;
+    case 'class':
+      return `class .${d.value}`;
+    case 'text':
+      return `文本含「${d.contains}」`;
+    case 'style':
+      return `样式 ${d.prop}: ${d.value}`;
+  }
 }
 
 export interface SequenceOutcome {

@@ -6,7 +6,7 @@
  *   inject → submit → awaitCompletion → extract
  */
 
-import type { SiteAdapter } from '../shared/adapter-schema';
+import type { SiteAdapter, ThinkingStateCheck } from '../shared/adapter-schema';
 
 export class AdapterError extends Error {
   constructor(
@@ -86,8 +86,8 @@ export async function runAdapter(
  * 未校准或某步失败都不阻断主流程（尽力而为，仍继续发送）。
  */
 async function ensureThinkingOn(adapter: SiteAdapter): Promise<void> {
-  const activeSel = adapter.selectors.thinkingActive;
-  if (activeSel && isThinkingOn(activeSel)) return; // 已开，避免误关
+  const state = adapter.thinkingState;
+  if (state && isThinkingOn(state)) return; // 已开，避免误关
 
   const steps = adapter.thinkingActivation;
   if (!steps?.length) return;
@@ -96,21 +96,46 @@ async function ensureThinkingOn(adapter: SiteAdapter): Promise<void> {
     if (!step) break; // 某步元素没出现：放弃后续步骤，但仍继续发送。
     robustClick(step as HTMLElement);
     await delay(jitter(350, 250));
-    // 若每步点击后即可检测到「已开」，提前结束剩余步骤，进一步降低误操作概率。
-    if (activeSel && isThinkingOn(activeSel)) return;
+    // 若每步点击后即可判定「已开」，提前结束剩余步骤，进一步降低误操作概率。
+    if (state && isThinkingOn(state)) return;
   }
 }
 
-/** 「深度思考已开」标志是否命中（存在且可见）。 */
-function isThinkingOn(selector: string): boolean {
+/**
+ * 判定「深度思考已开」：定位开关元素，再按判别式（属性/class/文本/计算样式）核验当前态。
+ * 判别式来自校准时「关→开」两态差异，能区分同一按钮的开/关（ADR-0016）。
+ */
+function isThinkingOn(state: ThinkingStateCheck): boolean {
   try {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
-      if (isVisible(el)) return true;
-    }
+    const el = firstVisibleMatch(state.selector);
+    if (!el) return false;
+    return matchesDiscriminator(el, state.on);
   } catch {
-    /* 选择器非法等：按未开处理 */
+    return false; // 选择器非法等：按未开处理（继续点击，尽力而为）
   }
-  return false;
+}
+
+function firstVisibleMatch(selector: string): HTMLElement | null {
+  const els = document.querySelectorAll<HTMLElement>(selector);
+  for (const el of els) {
+    if (isVisible(el)) return el;
+  }
+  return els.length > 0 ? els[0]! : null;
+}
+
+function matchesDiscriminator(el: HTMLElement, on: ThinkingStateCheck['on']): boolean {
+  switch (on.kind) {
+    case 'attr':
+      return (el.getAttribute(on.name) ?? '') === on.value;
+    case 'class':
+      return el.classList.contains(on.value);
+    case 'text':
+      return ((el.innerText ?? el.textContent ?? '').trim()).includes(on.contains);
+    case 'style':
+      return getComputedStyle(el).getPropertyValue(on.prop).trim() === on.value;
+    default:
+      return false;
+  }
 }
 
 /**
