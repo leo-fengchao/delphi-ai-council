@@ -216,10 +216,15 @@ ai-council-extension/
 - [ ] 风险缓解形态定稿（半自动确认？见 ADR-0007 反向决策预案）
 - [ ] 权限最小化、隐私说明、商店素材
 - [ ] 多站点适配器扩充至首批名单全量
+- [ ] **⚠️ 重新启用云端配置分发（开发期临时关闭项，务必恢复）**：
+  1. 把 `src/council-page/config-loader.ts` 的 `REMOTE_CONFIG_URL` 填回社区仓 raw 地址（注释里有备忘：`leo-fengchao/delphi-config`）；
+  2. **先 push** 最新 `config-repo/adapter-config.json` 到该仓（否则旧云端会盖掉内置——见 ADR-0008 优先级 校准>云端>内置）；
+  3. 确认 `wxt.config.ts` 的 `host_permissions` 仍含 `raw.githubusercontent.com` / `github.com`（开发期未移除，正常应仍在）。
+  > 背景：开发自用期为避免「旧云端+6h 缓存」盖掉刚改的内置，已把 `REMOTE_CONFIG_URL` 置空、内置作唯一真源（commit `d73d3b3`）。上架面向真实用户时必须恢复云端，否则站点改版无法热更新、众包回流也到不了用户。
 
 **后台渲染问题（关键，已定方案 ADR-0010）：** 后台/非激活标签页里浏览器会暂停 `requestAnimationFrame`、拒绝 `focus()`、不渲染虚拟列表 → 注入/点击/抽取全部失败（切到前台才正常）。`visibility.content.ts` 的可见性伪装只能骗过站点自身的 `document.hidden` 暂停，盖不住内核层限制。**采用方案：每站一窗、并排平铺**（`council-tabs.ts`），让每个站点的标签页都「激活且可见」从而真正渲染。代价是占屏；更省屏的渲染保活为优化项（见 roadmap）。
 
-**Current Focus：** Phase 7 深度思考默认开启已完成代码（构建/类型检查通过，待实机联调）。要点（ADR-0016）：①开关默认开；②新增 `thinkingState`（定位选择器 + 判别式），由校准时「关→开」两态 diff 自动推导，覆盖 属性/class/文本/背景色 四类区别——根治"同一按钮只变色/变字、单选择器分不清两态、再点反而误关"；运行时 `ensureThinkingOn` 先判定已开则跳过点击；③主席 per-leg **全程强制开**，总开关仅影响其他成员；④校准工具条新增「思考状态(两态)」录制。**下一步：逐站录「深度思考(多步)」+「思考状态(两态)」并复测**（已开跳过 / 未开开启 / 不误关）；随后 Phase 8 多轮辩论 Debate（待立 ADR-0014）。另：Phase 6 配置仓已接线 `leo-fengchao/delphi-config`，远程拉取生效。海外 3 家加载方式见下「海外站点」。
+**Current Focus：** Phase 7 深度思考默认开启已完成代码（构建/类型检查通过，待实机联调）。要点（ADR-0016）：①开关默认开；②新增 `thinkingState`（定位选择器 + 判别式），由校准时「关→开」两态 diff 自动推导，覆盖 属性/class/文本/背景色 四类区别——根治"同一按钮只变色/变字、单选择器分不清两态、再点反而误关"；运行时 `ensureThinkingOn` 先判定已开则跳过点击；③主席 per-leg **全程强制开**，总开关仅影响其他成员；④校准工具条新增「思考状态(两态)」录制。**下一步：逐站录「深度思考(多步)」+「思考状态(两态)」并复测**（已开跳过 / 未开开启 / 不误关）；随后 Phase 8 多轮辩论 Debate（待立 ADR-0014）。另：Phase 6 配置仓已接线 `leo-fengchao/delphi-config`，但**开发自用期已临时关闭云端拉取**（`REMOTE_CONFIG_URL` 置空，内置为唯一真源，避免旧云端+缓存盖掉刚改的内置；commit `d73d3b3`）——**上架前务必恢复，已记入 Phase 10 清单**。海外 3 家加载方式见下「海外站点」。
 
 ### 海外站点（ChatGPT / Claude / Gemini）的实测方式
 
