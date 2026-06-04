@@ -4,7 +4,7 @@
     {
       "id": "deepseek",
       "displayName": "DeepSeek",
-      "version": 1,
+      "version": 2,
       "matches": [
         "https://chat.deepseek.com/*"
       ],
@@ -18,6 +18,17 @@
       "input": {
         "method": "paste",
         "submit": "clickButton"
+      },
+      "thinkingActivation": [
+        "div > div > div:nth-of-type(2) > div:nth-of-type(1) > div.ds-toggle-button"
+      ],
+      "thinkingState": {
+        "selector": "div > div > div:nth-of-type(2) > div:nth-of-type(1) > div.ds-toggle-button",
+        "on": {
+          "kind": "attr",
+          "name": "aria-pressed",
+          "value": "true"
+        }
       },
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -36,7 +47,7 @@
     {
       "id": "kimi",
       "displayName": "Kimi",
-      "version": 2,
+      "version": 3,
       "matches": [
         "https://kimi.moonshot.cn/*",
         "https://www.kimi.com/*"
@@ -51,6 +62,17 @@
       "input": {
         "method": "paste",
         "submit": "clickButton"
+      },
+      "thinkingActivation": [
+        "div.current-model",
+        "div.v-binder-follower-content > div.n-popover > div.models-popover > div.models-container > div.model-item"
+      ],
+      "thinkingState": {
+        "selector": "div.current-model",
+        "on": {
+          "kind": "text",
+          "contains": "K2.6 思考"
+        }
       },
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -68,7 +90,7 @@
     {
       "id": "qwen",
       "displayName": "通义千问",
-      "version": 2,
+      "version": 3,
       "matches": [
         "https://www.qianwen.com/*",
         "https://tongyi.aliyun.com/*",
@@ -84,6 +106,17 @@
       "input": {
         "method": "paste",
         "submit": "clickButton"
+      },
+      "thinkingActivation": [
+        "div:nth-of-type(2) > div > div > span > button.outline-none"
+      ],
+      "thinkingState": {
+        "selector": "div:nth-of-type(2) > div > div > span > button.outline-none",
+        "on": {
+          "kind": "attr",
+          "name": "aria-pressed",
+          "value": "true"
+        }
       },
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -101,7 +134,7 @@
     {
       "id": "doubao",
       "displayName": "豆包",
-      "version": 2,
+      "version": 3,
       "matches": [
         "https://www.doubao.com/*"
       ],
@@ -115,6 +148,17 @@
       "input": {
         "method": "setNativeValue",
         "submit": "clickButton"
+      },
+      "thinkingActivation": [
+        "div.custom-scrollbar-style > div:nth-of-type(2) > div"
+      ],
+      "thinkingState": {
+        "selector": "button > div > button.outline-transparent",
+        "on": {
+          "kind": "attr",
+          "name": "data-checked",
+          "value": "true"
+        }
       },
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -133,7 +177,7 @@
     {
       "id": "yuanbao",
       "displayName": "腾讯元宝",
-      "version": 2,
+      "version": 3,
       "matches": [
         "https://yuanbao.tencent.com/*"
       ],
@@ -147,6 +191,16 @@
       "input": {
         "method": "paste",
         "submit": "enterKey"
+      },
+      "thinkingActivation": [
+        "div:nth-of-type(2) > div:nth-of-type(3) > div:nth-of-type(1) > div > div:nth-of-type(1)"
+      ],
+      "thinkingState": {
+        "selector": "div:nth-of-type(2) > div:nth-of-type(3) > div:nth-of-type(1) > div > div:nth-of-type(1)",
+        "on": {
+          "kind": "class",
+          "value": "ThinkSelector_selected__YUTmh"
+        }
       },
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -164,7 +218,7 @@
     {
       "id": "chatgpt",
       "displayName": "ChatGPT",
-      "version": 1,
+      "version": 2,
       "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
@@ -179,6 +233,18 @@
       "input": {
         "method": "execCommandInsertText",
         "submit": "enterKey"
+      },
+      "thinkingActivation": [
+        "#composer-plus-btn",
+        "div:nth-of-type(10) > div > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2)"
+      ],
+      "thinkingState": {
+        "selector": "div.contain-inline-size",
+        "on": {
+          "kind": "attr",
+          "name": "data-tone",
+          "value": "accent"
+        }
       },
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -225,7 +291,7 @@
     {
       "id": "gemini",
       "displayName": "Gemini",
-      "version": 1,
+      "version": 2,
       "matches": [
         "https://gemini.google.com/*"
       ],
@@ -241,10 +307,18 @@
         "submit": "enterKey"
       },
       "thinkingActivation": [
-        "button.input-area-switch > span.mat-mdc-button-touch-target",
-        "div.popover-menu > gem-menu.ng-star-inserted > gem-menu-item.ng-star-inserted > gem-menu-item-content > div.label-container",
-        "div.ng-star-inserted > gem-menu > gem-menu-item.ng-star-inserted > gem-menu-item-content.checkmark-only > div.label-container"
+        "button[data-test-id=\"bard-mode-menu-button\"]",
+        "div.ng-star-inserted > div.popover-menu > gem-menu.ng-star-inserted > gem-menu-item.ng-star-inserted > gem-menu-item-content",
+        "div.cdk-overlay-pane > div.ng-star-inserted > gem-menu > gem-menu-item.ng-star-inserted > gem-menu-item-content.checkmark-only"
       ],
+      "thinkingState": {
+        "selector": "button[data-test-id=\"bard-mode-menu-button\"]",
+        "on": {
+          "kind": "attr",
+          "name": "aria-label",
+          "value": "打开模式选择器，当前模式为“Pro 扩展”"
+        }
+      },
       "completion": {
         "primarySignal": "stopButtonDisappears",
         "idleMutationMs": 3000,
