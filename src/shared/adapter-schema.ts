@@ -12,6 +12,11 @@ export type CompletionSignal = 'stopButtonDisappears' | 'streamingIndicatorGone'
 export type ExtractionScope = 'lastAssistantMessage';
 export type ExtractionFormat = 'markdown' | 'text' | 'html';
 
+/**
+ * 选择器字段（含本接口各字段、thinkingActivation 步骤、thinkingState.selector、auth.*）均支持
+ * **CSS 或 XPath**：以 `//`、`(//`、`./`、`(.//` 开头或 `xpath:` 前缀者按 XPath 解析，否则按 CSS。
+ * XPath 用于 CSS 表达不了的场景：按文本命中（`//*[text()='思考']`）、按序取第 N 个（`(//button)[1]`）等。
+ */
 export interface AdapterSelectors {
   /** 输入框（注意多为 contenteditable / ProseMirror，也可能是 textarea） */
   inputBox: string;

@@ -109,8 +109,7 @@ function isThinkingOn(state: ThinkingStateCheck): boolean {
   try {
     // 扫描**所有**命中元素：任一「可见且满足判别式」即判已开。
     // 不只看首个——否则当匹配元素不是首个、或关态根本没有该元素时会误判。
-    const els = document.querySelectorAll<HTMLElement>(state.selector);
-    for (const el of els) {
+    for (const el of queryElements(state.selector)) {
       if (isVisible(el) && matchesDiscriminator(el, state.on)) return true;
     }
     return false;
@@ -143,7 +142,7 @@ function matchesDiscriminator(el: HTMLElement, on: ThinkingStateCheck['on']): bo
  */
 function detectCaptcha(adapter: SiteAdapter): boolean {
   const sel = adapter.auth?.captchaSelector;
-  if (sel && document.querySelector(sel)) return true;
+  if (sel && queryFirst(sel)) return true;
   // 常见验证码服务的 iframe（极验 / 腾讯防水墙 / Cloudflare Turnstile / hCaptcha / reCAPTCHA）。
   const captchaIframe =
     'iframe[src*="geetest"], iframe[src*="captcha"], iframe[src*="turnstile"],' +
@@ -158,7 +157,7 @@ function detectCaptcha(adapter: SiteAdapter): boolean {
  */
 function detectLoginWallStrong(adapter: SiteAdapter): boolean {
   const sel = adapter.auth?.loggedOutSelector;
-  if (sel && document.querySelector(sel)) return true;
+  if (sel && queryFirst(sel)) return true;
   if (document.querySelector('input[type="password"]')) return true;
   return false;
 }
@@ -288,7 +287,7 @@ async function submit(input: Element, adapter: SiteAdapter): Promise<void> {
   // 都等它变为可用状态再发。应对 Kimi 这种粘入超长文本转附件时，异步处理需几秒钟的问题。
   const getBtn = () => {
     if (!adapter.selectors.sendButton) return null;
-    const btns = document.querySelectorAll<HTMLElement>(adapter.selectors.sendButton);
+    const btns = queryElements(adapter.selectors.sendButton);
     for (let i = btns.length - 1; i >= 0; i--) {
       const b = btns[i]!;
       if (isVisible(b) && !isDisabled(b)) return b;
@@ -355,7 +354,7 @@ async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
   // 1) 若有 stopButton：先等它出现（确认已开始生成），再等它消失。
   if (stopButton) {
     const getVisibleStopBtn = () => {
-      for (const el of document.querySelectorAll<HTMLElement>(stopButton)) {
+      for (const el of queryElements(stopButton)) {
         // 过滤掉 display: none 或隐藏的无关按钮
         if (el.offsetWidth <= 0 || el.offsetHeight <= 0) continue;
         // 发送/停止共用同一按钮的站点（如 DeepSeek）：仅当内部 SVG 图标是「停止」形状才算生成中。
@@ -376,12 +375,12 @@ async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
   }
 
   // 2) 静默兜底：assistantMessage 子树连续 idleMutationMs 无变更即视为完成。
-  const target = document.querySelector(adapter.selectors.assistantMessage)?.parentElement ?? document.body;
+  const target = queryFirst(adapter.selectors.assistantMessage)?.parentElement ?? document.body;
   await waitForIdle(target, idleMutationMs, deadline);
 }
 
 function extract(adapter: SiteAdapter): string {
-  const nodes = Array.from(document.querySelectorAll<HTMLElement>(adapter.selectors.assistantMessage));
+  const nodes = queryElements(adapter.selectors.assistantMessage);
   // 从后往前取「可见且非空」的节点，跳过隐藏模板 / 文件拖放占位等脏节点（如豆包的上传区）。
   for (let i = nodes.length - 1; i >= 0; i--) {
     const el = nodes[i]!;
@@ -405,11 +404,50 @@ function isVisible(el: HTMLElement): boolean {
   return el.offsetParent !== null || el.getClientRects().length > 0;
 }
 
+// ---- 选择器解析：同时支持 CSS 与 XPath ----
+// 配置里的任一选择器字段都可写 XPath（以 `//`、`(//`、`./`、`(.//` 开头，或 `xpath:` 前缀）。
+// 文本匹配（text()='思考'）、按序取第 N 个（(//...)[1]）等 CSS 表达不了的场景，用 XPath 最直接。
+
+/** 判断一个选择器字符串是否为 XPath。 */
+function isXPath(selector: string): boolean {
+  const s = selector.trimStart();
+  return s.startsWith('//') || s.startsWith('(//') || s.startsWith('./') || s.startsWith('(.//') || s.startsWith('xpath:');
+}
+
+/** 解析选择器（CSS 或 XPath）为元素数组。XPath 命中文本节点时回退到其父元素。出错返回空数组。 */
+function queryElements(selector: string): HTMLElement[] {
+  if (isXPath(selector)) {
+    const expr = selector.trimStart().replace(/^xpath:/, '');
+    try {
+      const snap = document.evaluate(expr, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      const out: HTMLElement[] = [];
+      for (let i = 0; i < snap.snapshotLength; i++) {
+        const node = snap.snapshotItem(i);
+        if (node instanceof HTMLElement) out.push(node);
+        else if (node?.parentElement) out.push(node.parentElement); // text()/属性节点 → 取其元素
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+  try {
+    return Array.from(document.querySelectorAll<HTMLElement>(selector));
+  } catch {
+    return [];
+  }
+}
+
+/** 解析选择器并返回第一个命中元素（CSS/XPath 通用）。 */
+function queryFirst(selector: string): HTMLElement | null {
+  return queryElements(selector)[0] ?? null;
+}
+
 // ---- 通用等待原语 ----
 
 async function waitForElement(selector: string, timeoutMs: number): Promise<Element | null> {
   const getEl = () => {
-    const els = document.querySelectorAll<HTMLElement>(selector);
+    const els = queryElements(selector);
     for (let i = els.length - 1; i >= 0; i--) {
       const e = els[i]!;
       if (isVisible(e)) return e;

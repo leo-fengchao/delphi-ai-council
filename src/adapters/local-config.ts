@@ -80,7 +80,7 @@ const kimi: SiteAdapter = {
 const qwen: SiteAdapter = {
   id: 'qwen',
   displayName: '通义千问',
-  version: 3,
+  version: 4,
   // 实测真实域名是 www.qianwen.com（旧 tongyi 域名会重定向到此），必须匹配它内容脚本才注入。
   matches: ['https://www.qianwen.com/*', 'https://tongyi.aliyun.com/*', 'https://www.tongyi.com/*'],
   newChatUrl: 'https://www.qianwen.com/',
@@ -95,10 +95,11 @@ const qwen: SiteAdapter = {
   },
   // 千问用 paste 注入（execCommand 不更新其框架状态、发送键保持灰色）；并改点按钮发送。
   input: { method: 'paste', submit: 'clickButton' },
-  // 深度思考开关（2026-06-04 实测）：输入区的「深度思考」切换按钮，aria-pressed 表示开/关。
-  thinkingActivation: ['div:nth-of-type(2) > div > div > span > button.outline-none'],
+  // 深度思考开关（2026-06-04 用户 XPath 校准）：aria-label="思考" 的按钮（页面有两个，取第一个），
+  // aria-pressed 表示开/关。原正位选择器会误点到「直播」入口（导致开不了思考、还弹 /live/ 页）。
+  thinkingActivation: ["(//button[@aria-label='思考'])[1]"],
   thinkingState: {
-    selector: 'div:nth-of-type(2) > div > div > span > button.outline-none',
+    selector: "(//button[@aria-label='思考'])[1]",
     on: { kind: 'attr', name: 'aria-pressed', value: 'true' },
   },
   completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 120000 },
@@ -109,25 +110,27 @@ const qwen: SiteAdapter = {
 const doubao: SiteAdapter = {
   id: 'doubao',
   displayName: '豆包',
-  version: 3,
+  version: 4,
   matches: ['https://www.doubao.com/*'],
   newChatUrl: 'https://www.doubao.com/chat/',
   selectors: {
     inputBox: 'textarea.semi-input-textarea, textarea[placeholder*="发消息"]',
     sendButton: '#flow-end-msg-send',
-    stopButton: 'button[data-testid="chat_input_stop_button"], div[class*="stop"]',
+    // 停止按钮（2026-06-04 用户 XPath 校准）：用 XPath 精确定位，取代原宽泛的 div[class*="stop"]
+    // （后者易误匹配导致刚发就误判完成/提前截止）。
+    stopButton: "//div[contains(@class,'items-center')]//div[@data-state='closed']",
     // 回答正文容器（含 markdown 渲染）。
     assistantMessage: '.flow-markdown-body',
   },
   // 豆包回车=换行，必须点发送按钮。
   input: { method: 'setNativeValue', submit: 'clickButton' },
-  // 深度思考开关（2026-06-04 实测）：点输入区「深度思考」入口；data-checked 表示开/关。
-  // 注：用户校准导出里首步误录了 'html'（误点），已剔除。
-  thinkingActivation: ['div.custom-scrollbar-style > div:nth-of-type(2) > div'],
-  thinkingState: {
-    selector: 'button > div > button.outline-transparent',
-    on: { kind: 'attr', name: 'data-checked', value: 'true' },
-  },
+  // 深度思考=模式选择（2026-06-04 用户 XPath 校准）：①点模式选择按钮 ②在弹出菜单选「思考」。
+  // 第二步用 XPath 按文本 text()='思考' 命中（CSS 无法按文本选）。模式选择是单选式、重复选同一项幂等，
+  // 故不配 thinkingState：每轮直接确保选到「思考」即可，无误关风险。
+  thinkingActivation: [
+    'div[data-valid-btn="mode-select-action-btn"]',
+    "//div[@data-side='top' and @role='menu']//div[@role='menuitem']//*[text()='思考']",
+  ],
   // 豆包流式中有搜索/图片/表格的停顿，静默阈值调大，避免抓到一半就误判完成。
   completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 4000, maxWaitMs: 120000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
@@ -172,7 +175,7 @@ const yuanbao: SiteAdapter = {
 const chatgpt: SiteAdapter = {
   id: 'chatgpt',
   displayName: 'ChatGPT',
-  version: 2,
+  version: 3,
   matches: ['https://chatgpt.com/*', 'https://chat.openai.com/*'],
   newChatUrl: 'https://chatgpt.com/',
   selectors: {
@@ -189,9 +192,10 @@ const chatgpt: SiteAdapter = {
   // 关态输入框下方无任何指示物，开态才出现思考 chip → 用 presence 判别：
   // 选择器只匹配「开启态才出现的 accent chip」，存在即已开、不存在即未开（scan-all，不怕首个不是它）。
   // ⚠️ 选择器较通用，是最不稳的一个，实机验收重点核对；若误判改用更专属的 chip 选择器。
+  // ①点「+」菜单按钮；②选「思考一下」菜单项（2026-06-04 用户 XPath 校准，按文本命中，取代原超深正位选择器）。
   thinkingActivation: [
     '#composer-plus-btn',
-    'div:nth-of-type(10) > div > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(2)',
+    "//div[@role='menuitemradio']//*[text()='思考一下']",
   ],
   thinkingState: {
     selector: 'div.contain-inline-size[data-tone="accent"]',
