@@ -224,9 +224,10 @@ function setNativeValue(el: HTMLTextAreaElement | HTMLInputElement, value: strin
  * 自定义编辑器差异很大（Quill 吃 execCommand；Lexical/Slate 只认 paste），故用兜底链覆盖。
  * preferPaste=true 时把 paste 提到最前（如 Kimi）。
  *
- * 关键：每次尝试前**先清空**编辑器、尝试后**异步等一拍再判定**。
- * 编辑器对 paste/exec 的写入常是异步生效，若同步判定会误以为失败而继续下一种方法，
- * 导致同一段文本被注入多次（如 Kimi 输入 3 次）。清空 + 异步校验可确保命中即停、只注入一次。
+ * 关键 1：每次尝试前**先清空**编辑器、尝试后**异步校验**。编辑器对 paste/exec 的写入常是异步生效。
+ * 关键 2：校验「内容是否注入到**接近完整**」而非仅「非空」。长多行文本（如交叉评审 prompt）+ 多标签
+ *   并行争用时，编辑器可能只先插入了第一行；若此时就判成功并发送，会只发出第一行（Gemini 阶段二实测）。
+ *   故按「非空白字符数 ≥ 目标 90%」轮询等待，直到接近完整或超时，再返回；既避免发半句，也避免重复注入。
  */
 async function injectContentEditable(el: HTMLElement, text: string, preferPaste: boolean): Promise<void> {
   const clearEditor = () => {
@@ -262,9 +263,21 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
   for (const attempt of attempts) {
     clearEditor();
     attempt();
-    await delay(200); // 等异步写入生效再判定，避免重复注入
-    if ((el.textContent ?? '').trim() !== '') return;
+    if (await waitForInjected(el, text, 4000)) return; // 等注入到接近完整再返回（命中即停）
   }
+}
+
+/** 编辑器当前文本的非空白字符数是否达到目标的 ~90%（容忍换行/空白被编辑器归一）。轮询至达标或超时。 */
+async function waitForInjected(el: HTMLElement, text: string, timeoutMs: number): Promise<boolean> {
+  const nonWs = (s: string) => s.replace(/\s+/g, '');
+  const need = Math.max(1, Math.floor(nonWs(text).length * 0.9));
+  const cur = () => nonWs(el.innerText ?? el.textContent ?? '').length;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cur() >= need) return true;
+    await delay(100);
+  }
+  return cur() >= need;
 }
 
 async function submit(input: Element, adapter: SiteAdapter): Promise<void> {
