@@ -1,15 +1,15 @@
 /**
  * 议会标签页管理（ADR-0004 / ADR-0010）。
  *
- * 执行模式：**每站一窗、并排平铺**。
+ * 执行模式：**每站一窗、后台最大化**。
  * 后台/非激活标签页里浏览器会暂停 requestAnimationFrame、拒绝 focus()、不渲染虚拟列表，
- * 导致注入/点击/抽取全部失败（见 ADR-0010）。因此给每个站点开一个**独立窗口、平铺到屏幕网格**，
- * 让每个窗口的标签页都处于「激活且可见」状态，从而真正渲染与响应。
+ * 导致注入/点击/抽取全部失败（见 ADR-0010）。因此给每个站点开一个**独立窗口且最大化**，
+ * 确保即使在小屏幕上也不会触发站点的移动端 UI，让每个标签页都处于「桌面版激活且可见」状态。
  *
- * 窗口以 focused:false 创建：可见、可渲染，但不抢占用户正在看的 Council Page 焦点。
+ * 窗口以 state: 'maximized', focused: false 创建：可见、可渲染，但不抢占 Council Page 焦点。
  * 同时对每个标签页设 autoDiscardable=false，避免被浏览器丢弃中断生成。
  *
- * ⚠️ 这是「先确保功能」的朴素实现；窗口数量多时占屏。优化（更省屏的渲染保活）见 roadmap。
+ * ⚠️ 此时多个站点的窗口在后台会重叠占满全屏。优化（更省屏的渲染保活）见 roadmap。
  */
 
 import type { SiteAdapter } from '../shared/adapter-schema';
@@ -23,35 +23,28 @@ export interface CouncilTabs {
   windows: Map<string, number>;
 }
 
-interface Cell {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
 
-/** 为给定适配器各开一个窗口，平铺到屏幕网格；逐个关闭丢弃保护。 */
+/** 为给定适配器各开一个后台最大化窗口；逐个关闭丢弃保护。 */
 export async function openCouncilTabs(adapters: SiteAdapter[]): Promise<CouncilTabs> {
   if (adapters.length === 0) throw new Error('没有可用的参会站点');
-
-  const cells = tileGrid(adapters.length);
   const tabs = new Map<string, number>();
   const windows = new Map<string, number>();
   const windowIds: number[] = [];
 
   for (let i = 0; i < adapters.length; i++) {
     const adapter = adapters[i]!;
-    const cell = cells[i]!;
     try {
+      const screenW = (globalThis.screen?.availWidth ?? 1440) || 1440;
+      const screenH = (globalThis.screen?.availHeight ?? 900) || 900;
       // focused:false → 窗口可见可渲染，但不抢占 Council Page 的焦点。
       const win = await chrome.windows.create({
         url: adapter.newChatUrl,
         focused: false,
         type: 'normal',
-        left: cell.left,
-        top: cell.top,
-        width: cell.width,
-        height: cell.height,
+        left: 0,
+        top: 0,
+        width: screenW,
+        height: screenH,
       });
       if (win.id != null) windowIds.push(win.id);
       const tabId = win.tabs?.[0]?.id;
@@ -68,24 +61,6 @@ export async function openCouncilTabs(adapters: SiteAdapter[]): Promise<CouncilT
   return { windowIds, tabs, windows };
 }
 
-/** 把屏幕可用区域切成能容纳 n 个单元的网格。 */
-function tileGrid(n: number): Cell[] {
-  const screenW = (globalThis.screen?.availWidth ?? 1440) || 1440;
-  const screenH = (globalThis.screen?.availHeight ?? 900) || 900;
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const cellW = Math.floor(screenW / cols);
-  const cellH = Math.floor(screenH / rows);
-
-  const cells: Cell[] = [];
-  for (let i = 0; i < n; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    cells.push({ left: col * cellW, top: row * cellH, width: cellW, height: cellH });
-  }
-  return cells;
-}
-
 /**
  * 重开单个站点窗口（Watchdog 恢复 / 崩溃续跑用，ADR-0004 / ADR-0011）。
  * 标签页被关/被丢弃后，用它把这一家重新拉起来再重发。
@@ -93,7 +68,17 @@ function tileGrid(n: number): Cell[] {
 export async function openSingleCouncilWindow(
   adapter: SiteAdapter,
 ): Promise<{ windowId: number; tabId: number }> {
-  const win = await chrome.windows.create({ url: adapter.newChatUrl, focused: false, type: 'normal' });
+  const screenW = (globalThis.screen?.availWidth ?? 1440) || 1440;
+  const screenH = (globalThis.screen?.availHeight ?? 900) || 900;
+  const win = await chrome.windows.create({
+    url: adapter.newChatUrl,
+    focused: false,
+    type: 'normal',
+    left: 0,
+    top: 0,
+    width: screenW,
+    height: screenH,
+  });
   const windowId = win.id;
   const tabId = win.tabs?.[0]?.id;
   if (windowId == null || tabId == null) throw new Error(`无法重开 ${adapter.displayName} 窗口`);
