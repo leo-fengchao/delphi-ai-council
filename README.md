@@ -274,6 +274,11 @@ ai-council-extension/
    报 `captcha`/`not_logged_in`/`timeout`，让 UI 显示失败 + 「重试」（`runtime.ts awaitCompletion`）。
    > 注：豆包**验证码本身的选择器**（`auth.captchaSelector`）仍可能与实际 DOM 不符，需实机校准；但即便没识别为
    > captcha，本次修复也已杜绝「呈现陈旧答案」——最差只会报超时失败，不会再给出错的回答。
+7. **Gemini 改版「深度思考」重校准（2026-06-05 实测，中/英双语）**：Gemini 把模型与思考等级在菜单里**拆成两条
+   独立项**，且选模型会**关闭菜单**。`thinkingActivation` 改为开两次菜单（开→选 Pro 模型→重开→展开「思考等级」
+   →选「扩展/Extended」），菜单项改用**文本 XPath**（弃 `ng-star`/`nth` 脆性，亦抗版本号 3.1→3.2 变动）；判别式新增
+   `attrContains`（一条同时匹配英文 `Extended`/中文 `扩展`，单条覆盖双语）（`local-config.ts` / `adapter-schema.ts` /
+   `picker.ts` / `runtime.ts`）。
 
 ### 海外站点（ChatGPT / Claude / Gemini）的实测方式
 
@@ -302,7 +307,7 @@ ai-council-extension/
 - [ADR-0007](docs/adr/0007-fully-automated-injection.md) · 评审/总结阶段采用全自动注入发送（定稿 Q1）
 - [ADR-0008](docs/adr/0008-config-loader-github-raw.md) · ConfigLoader 远程源采用 GitHub raw + 三级回退（定稿 Q5）
 - [ADR-0009](docs/adr/0009-user-visual-selector-override.md) · 用户可视化校准 + 本地选择器覆盖层（Phase 3，优先于韧性层）
-- [ADR-0010](docs/adr/0010-per-window-tiling-for-background-rendering.md) · 每站一窗、并排平铺，解决后台标签页不渲染（修订 ADR-0004 承载方式）
+- [ADR-0010](docs/adr/0010-per-window-tiling-for-background-rendering.md) · 每站一窗、后台最大化，解决后台标签页不渲染 + 小屏触发移动端 UI（修订 ADR-0004 承载方式）
 - [ADR-0011](docs/adr/0011-resilience-lightweight-persisted-orchestration.md) · 韧性层先用轻量持久化编排，XState 推迟到 Phase 5
 - [ADR-0012](docs/adr/0012-xstate-orchestration.md) · 引入 XState 把议会编排重构为声明式状态机（Phase 5 迁移落地）
 - [ADR-0013](docs/adr/0013-crowdsourced-selector-sharing.md) · 众包共创：GitHub Issue 提交 + 维护者人工审核 + 远程回流分发（Phase 6）
