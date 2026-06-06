@@ -20,6 +20,7 @@ import {
   patchLeg,
   type LegState,
   type SessionState,
+  type DebateState,
 } from '../shared/session-state';
 import { Watchdog } from './watchdog';
 
@@ -36,6 +37,8 @@ export interface BroadcastHooks {
   onLegStage?: (adapterId: string, stage: ProgressMessage['stage']) => void;
   /** 某一腿出最终结果即回调（不等其它腿），用于即时刷新该卡片（修复"卡在抽取中"） */
   onLegResult?: (result: LegResult) => void;
+  /** 辩论进度回调（每轮发问/每个目标回复后），用于刷新辩论时间线（Phase 8 / ADR-0014） */
+  onDebateUpdate?: (debate: DebateState) => void;
 }
 
 export interface DriveOptions {
