@@ -1,49 +1,93 @@
-import { useEffect, useMemo, useState } from 'react';
+/* ============================================================
+   集思 · Delphi — Council Page（Phase 9 UI 精调 / ADR-0015）
+
+   设计稿落地：左侧历史侧栏 + 主题切换；中央 介绍 → 模型/主席选择 → 输入区 →
+   主席结论 → 成员进度卡片 → 辩论时间线；成员卡片为「概览方块 + 阶段步进器」，
+   点击阶段弹窗看完整原文；一键追问跳原生页。全部接真实 XState 机器与归档持久化。
+   ============================================================ */
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMachine } from '@xstate/react';
 import { councilMachine } from '../../council-page/machine';
 import type { AdapterConfig, PickRole, SiteAdapter } from '../../shared/adapter-schema';
 import { PICK_ROLE_LABELS } from '../../shared/adapter-schema';
 import type { ProgressMessage } from '../../shared/messaging';
 import { loadAdapterConfig, type ConfigSource } from '../../council-page/config-loader';
-import { driveLeg, type LegResult, type CouncilTabs } from '../../council-page/orchestrator';
+import { driveLeg, type LegResult } from '../../council-page/orchestrator';
 import { openCalibration, startInPageCalibration, closeCalibration } from '../../council-page/calibration';
 import { clearSiteOverride, exportOverrides, importOverrides, type UserOverrides } from '../../shared/overrides';
 import { COMMUNITY_REPO, openContributionIssue } from '../../shared/contribution';
-import { loadSession, clearSession, hasRecoverableLegs, type SessionState } from '../../shared/session-state';
+import {
+  loadSession,
+  clearSession,
+  loadArchive,
+  archiveSession,
+  type SessionState,
+  type DebateState,
+  type ArchivedSession,
+} from '../../shared/session-state';
 
-const STAGE_LABEL: Record<ProgressMessage['stage'], string> = {
-  injecting: '注入问题…',
-  submitted: '已发送，生成中…',
-  awaiting: '生成中…',
-  extracting: '抽取回答…',
+import { useTheme } from './theme';
+import { deriveLeg, type LegView, type MachineValue, type StageKey } from './leg-model';
+import { Ic } from './ui/icons';
+import { Sidebar } from './components/Sidebar';
+import { Composer, ModelPicker, RecoveryBar } from './components/Composer';
+import { ProgressCard } from './components/ProgressCard';
+import { DetailModal } from './components/DetailModal';
+import { DebateTimeline } from './components/DebateTimeline';
+import { ConclusionPanel } from './components/ConclusionPanel';
+import { CalibrationPanel } from './components/CalibrationPanel';
+
+const CODE_LABEL: Record<string, string> = {
+  not_logged_in: '需要登录该站点（登录后点「重试」）',
+  captcha: '出现人机验证（手动通过后点「重试」）',
+  input_not_found: '没找到输入框（页面结构可能变了）',
+  extraction_empty: '没抓到回答内容（页面结构可能变了）',
+  timeout: '等待生成超时',
 };
 
-type LegView =
-  | { kind: 'pending' }
-  | { kind: 'running'; stage?: ProgressMessage['stage'] }
-  | { kind: 'done'; text: string }
-  | { kind: 'error'; message: string };
+function toView(r: LegResult): LegView {
+  if (r.ok && r.text) return { kind: 'done', text: r.text };
+  const friendly = r.code ? CODE_LABEL[r.code] : undefined;
+  return { kind: 'error', message: friendly ?? r.error ?? '未知错误' };
+}
+
+/** 默认勾选的国内站点（海外站点需用户日常浏览器加载，见 README）。 */
+const DEFAULT_CN = new Set(['deepseek', 'kimi', 'qwen', 'doubao', 'yuanbao']);
+
+type ViewMode = 'idle' | 'live' | 'archive';
 
 export function App() {
   const [config, setConfig] = useState<AdapterConfig | null>(null);
   const [source, setSource] = useState<ConfigSource | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [chairpersonId, setChairpersonId] = useState<string>('');
   const [prompt, setPrompt] = useState('');
+  const [enableThinking, setEnableThinking] = useState(true);
+  const [enableDebate, setEnableDebate] = useState(false);
+
   const [legs, setLegs] = useState<Record<string, LegView>>({});
   const [askedPrompt, setAskedPrompt] = useState('');
-  // 深度思考默认开启（Phase 7 / ADR-0016：议事质量基线）。此开关只影响非主席成员，主席全程强制开。
-  const [enableThinking, setEnableThinking] = useState(true);
+  const [liveDebate, setLiveDebate] = useState<DebateState | null>(null);
+
   const [overrides, setOverrides] = useState<UserOverrides>({});
   const [calibratingId, setCalibratingId] = useState<string | null>(null);
   const [calibMsg, setCalibMsg] = useState('');
+  const [calibOpen, setCalibOpen] = useState(false);
   const [transferText, setTransferText] = useState('');
-  const [resumable, setResumable] = useState<SessionState | null>(null);
-  const [chairpersonId, setChairpersonId] = useState<string>('');
 
-  const chosen: SiteAdapter[] = useMemo(
-    () => (config ? config.adapters.filter((a) => selected.has(a.id)) : []),
-    [config, selected],
-  );
+  const [resumable, setResumable] = useState<SessionState | null>(null);
+
+  // 主题、侧栏、历史回看、弹窗、辩论身份揭示
+  const [theme, setTheme] = useTheme();
+  const [collapsed, setCollapsed] = useState(false);
+  const [archive, setArchive] = useState<ArchivedSession[]>([]);
+  const [mode, setMode] = useState<ViewMode>('idle');
+  const [viewArchived, setViewArchived] = useState<ArchivedSession | null>(null);
+  const [activeHist, setActiveHist] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ legId: string; stageKey: StageKey } | null>(null);
+  const [reveal, setReveal] = useState(false);
+
+  const chosen: SiteAdapter[] = useMemo(() => (config ? config.adapters.filter((a) => selected.has(a.id)) : []), [config, selected]);
 
   const [state, send] = useMachine(councilMachine, {
     input: {
@@ -52,32 +96,43 @@ export function App() {
       hooks: {
         onLegStage: (id: string, stage: ProgressMessage['stage']) => setLegs((prev) => ({ ...prev, [id]: { kind: 'running', stage } })),
         onLegResult: (r: LegResult) => setLegs((prev) => ({ ...prev, [r.adapterId]: toView(r) })),
-      }
-    }
+        onDebateUpdate: (d: DebateState) => setLiveDebate({ converged: d.converged, rounds: d.rounds.map((r) => ({ ...r, targets: r.targets.map((t) => ({ ...t })) })) }),
+      },
+    },
   });
 
   const running = !state.matches('idle') && !state.matches('finished') && !state.matches('error');
+  const machineValue = String(state.value) as MachineValue;
 
+  // —— 初始化：配置 + 归档 + 可恢复会话 ——
   useEffect(() => {
     loadAdapterConfig().then(({ config, source, overrides }) => {
       setConfig(config);
       setSource(source);
       setOverrides(overrides);
-      const cn = new Set(['deepseek', 'kimi', 'qwen', 'doubao', 'yuanbao']);
-      const selectedIds = config.adapters.filter((a) => cn.has(a.id)).map((a) => a.id);
-      setSelected(new Set(selectedIds));
-      if (selectedIds.length > 0) {
-        setChairpersonId(selectedIds[0] ?? '');
-      }
+      const ids = config.adapters.filter((a) => DEFAULT_CN.has(a.id)).map((a) => a.id);
+      setSelected(new Set(ids));
+      if (ids.length > 0) setChairpersonId(ids[0] ?? '');
     });
+    loadArchive().then(setArchive);
     loadSession().then((s) => {
-      // Allow resuming if not finished
       if (s && s.status !== 'finished') setResumable(s);
     });
   }, []);
 
-  // The machine state syncs the adapters during the START event, so we don't need the UPDATE_ADAPTERS effect.
-
+  // —— 议会完成即归档 ——（dedup 由 archiveSession 负责；用 ref 防重复触发）
+  const archivedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!state.matches('finished')) return;
+    const s = state.context.session;
+    if (!s || archivedRef.current === s.id) return;
+    archivedRef.current = s.id;
+    archiveSession(s).then(() => loadArchive().then(setArchive));
+    setActiveHist(s.id);
+    // 议事完成后清空输入框：此时按钮切换为「关闭所有打开的标签页」，
+    // 用户输入新问题即自动恢复为「发起议事」。
+    setPrompt('');
+  }, [state]);
 
   async function refreshConfig() {
     const { config, overrides } = await loadAdapterConfig();
@@ -85,13 +140,185 @@ export function App() {
     setOverrides(overrides);
   }
 
+  // —— 展示源：archive 回看 / live 机器 / idle 介绍 ——
+  const liveSession = state.context.session;
+  const displaySession: SessionState | null = mode === 'archive' ? viewArchived : mode === 'live' ? liveSession ?? null : null;
+  const displayValue: MachineValue = mode === 'archive' ? 'finished' : machineValue;
+  const showingArchive = mode === 'archive';
+
+  const adapterById = useMemo(() => new Map((config?.adapters ?? []).map((a) => [a.id, a] as const)), [config]);
+  const nameOf = (id: string) => adapterById.get(id)?.displayName ?? id;
+
+  const displayChair = displaySession?.chairpersonId ?? chairpersonId;
+
+  const legModels = useMemo(() => {
+    if (!displaySession) return [];
+    return displaySession.adapterIds
+      .map((id) => adapterById.get(id))
+      .filter((a): a is SiteAdapter => !!a)
+      .map((a) =>
+        deriveLeg(a, {
+          session: displaySession,
+          machineValue: displayValue,
+          live: showingArchive ? undefined : legs[a.id],
+          chairpersonId: displayChair,
+        }),
+      );
+  }, [displaySession, displayValue, showingArchive, legs, adapterById, displayChair]);
+
+  // idle（首页）不展示任何辩论时间线；否则按回看/实时取。
+  const displayDebate: DebateState | null =
+    mode === 'idle' ? null : showingArchive ? viewArchived?.debate ?? null : liveDebate ?? liveSession?.debate ?? null;
+  const summary = displaySession?.summary;
+  const finished = mode !== 'idle' && (showingArchive || state.matches('finished'));
+
+  const participated = displaySession ? displaySession.adapterIds.filter((id) => displaySession.initialAnswers?.[id]).length : 0;
+  const failedCount = displaySession ? displaySession.adapterIds.length - participated : 0;
+
+  // —— 选择/主席 ——
+  function toggle(id: string) {
+    if (running) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      if (!next.has(chairpersonId) && next.size > 0) setChairpersonId(Array.from(next)[0] ?? '');
+      else if (next.size === 0) setChairpersonId('');
+      return next;
+    });
+  }
+
+  async function closeAllTabs() {
+    if (!state.context.session) return;
+    const tabIds: number[] = [];
+    for (const leg of Object.values(state.context.session.legs)) {
+      if (leg.tabId != null) tabIds.push(leg.tabId);
+    }
+    if (tabIds.length > 0) {
+      try {
+        await chrome.tabs.remove(tabIds);
+      } catch (err) {
+        console.warn('Failed to close some tabs:', err);
+      }
+    }
+  }
+
+  async function start() {
+    const q = prompt.trim();
+    if (!q || running || chosen.length < 2 || !chairpersonId) return;
+    await closeAllTabs();
+    archivedRef.current = null;
+    setAskedPrompt(q);
+    setLiveDebate(null);
+    setViewArchived(null);
+    setActiveHist(null);
+    setMode('live');
+    setLegs(Object.fromEntries(chosen.map((a) => [a.id, { kind: 'pending' } as LegView])));
+    send({ type: 'START', prompt: q, enableThinking, enableDebate, chairpersonId, adapters: chosen });
+  }
+
+  async function abort() {
+    if (!running) return;
+    await closeAllTabs();
+    // 中止前把当前（部分）会话归档，便于回看已产出的内容。
+    const s = state.context.session;
+    if (s) {
+      archivedRef.current = s.id;
+      await archiveSession({ ...s, status: 'finished' });
+      await loadArchive().then(setArchive);
+    }
+    send({ type: 'ABORT' });
+  }
+
+  async function newCouncil() {
+    if (running) return;
+    // 回到首页前，关掉上一轮议会打开的全部 AI 窗口（按 session 记录的 tabId）。
+    await closeAllTabs();
+    setMode('idle');
+    setViewArchived(null);
+    setActiveHist(null);
+    setPrompt('');
+    setLegs({});
+    setLiveDebate(null);
+  }
+
+  function selectHistory(id: string) {
+    if (running) return;
+    const item = archive.find((s) => s.id === id);
+    if (!item) return;
+    setViewArchived(item);
+    setActiveHist(id);
+    setMode('archive');
+    setModal(null);
+  }
+
+  async function resume() {
+    if (!config || !resumable || running) return;
+    const session = resumable;
+    setResumable(null);
+    archivedRef.current = null;
+    setPrompt(session.prompt);
+    setAskedPrompt(session.prompt);
+    setEnableThinking(session.enableThinking);
+    setEnableDebate(session.enableDebate ?? false);
+    setLiveDebate(session.debate ?? null);
+    setChairpersonId(session.chairpersonId ?? session.adapterIds[0] ?? '');
+    const adapters = session.adapterIds.map((id) => adapterById.get(id)).filter((a): a is SiteAdapter => !!a);
+    setSelected(new Set(adapters.map((a) => a.id)));
+    setMode('live');
+    setViewArchived(null);
+    setLegs(
+      Object.fromEntries(
+        adapters.map((a) => {
+          const leg = session.legs[a.id];
+          return [a.id, leg?.status === 'done' && leg.text ? ({ kind: 'done', text: leg.text } as LegView) : ({ kind: 'running' } as LegView)];
+        }),
+      ),
+    );
+    send({ type: 'RESUME', session, adapters });
+  }
+
+  async function dismissResume() {
+    await clearSession();
+    setResumable(null);
+  }
+
+  async function retry(id: string) {
+    const adapter = adapterById.get(id);
+    const tabId = state.context.council?.tabs.get(id);
+    if (!adapter || tabId == null || !askedPrompt) return;
+    setLegs((prev) => ({ ...prev, [id]: { kind: 'running' } }));
+    const r = await driveLeg(adapter, tabId, askedPrompt, { onLegStage: (lid, stage) => setLegs((prev) => ({ ...prev, [lid]: { kind: 'running', stage } })) }, { enableThinking });
+    setLegs((prev) => ({ ...prev, [id]: toView(r) }));
+  }
+
+  async function askNative(id: string) {
+    const a = adapterById.get(id);
+    if (!a) return;
+    // 优先切到本场议会已打开、且仍存活的该站标签页（直接在原对话里追问）；
+    // 仅当回看历史 / 标签页已被关闭 / 拿不到 tabId 时，才新建一个原生页。
+    const liveTabId = !showingArchive ? state.context.session?.legs[id]?.tabId : undefined;
+    if (liveTabId != null) {
+      try {
+        const tab = await chrome.tabs.get(liveTabId);
+        await chrome.tabs.update(liveTabId, { active: true });
+        if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
+        return;
+      } catch {
+        /* 标签页已关闭 → 落到新建分支 */
+      }
+    }
+    if (a.newChatUrl) {
+      chrome.tabs.create({ url: a.newChatUrl, active: true }).catch((err) => console.warn('open native page failed', err));
+    }
+  }
+
+  // —— 校准通路 ——
   async function startCalibrate(adapter: SiteAdapter) {
     if (calibratingId) return;
     setCalibratingId(adapter.id);
-    setCalibMsg(`正在打开 ${adapter.displayName} 校准窗口…`);
+    setCalibMsg(`正在打开 ${adapter.displayName} 校准窗口…在该页面顶部工具条点角色按钮、再到页面点选元素，完成后点「完成校准」。`);
     try {
       const session = await openCalibration(adapter);
-      setCalibMsg(`已打开 ${adapter.displayName}：在该页面**顶部工具条**上点角色按钮，再到页面点选元素；完成后点工具条「完成校准」。`);
       await startInPageCalibration(session);
       await closeCalibration(session);
       await refreshConfig();
@@ -106,14 +333,12 @@ export function App() {
   async function doContribute(adapter: SiteAdapter) {
     const result = await openContributionIssue(adapter, overrides[adapter.id]);
     if (result.ok) {
-      const extra = result.identicalKeys && result.identicalKeys.length > 0
-        ? `（已自动排除了与内置一致的项：${result.identicalKeys.join('、')}）`
-        : '';
-      setCalibMsg(`已为 ${adapter.displayName} 打开 GitHub 提交页：请在该页面核对内容后点「Submit new issue」。维护者审核后会合并进社区配置，所有人自动获益。${extra}`);
+      const extra = result.identicalKeys && result.identicalKeys.length > 0 ? `（已自动排除与内置一致的项：${result.identicalKeys.join('、')}）` : '';
+      setCalibMsg(`已为 ${adapter.displayName} 打开 GitHub 提交页：核对后点「Submit new issue」。审核合并后所有人自动获益。${extra}`);
     } else if (result.noDiff) {
-      setCalibMsg(`当前校准内容与插件内置完全一致（涉及：${result.identicalKeys?.join('、')}），无需重复贡献。`);
+      setCalibMsg(`${adapter.displayName} 当前校准与内置完全一致（涉及：${result.identicalKeys?.join('、')}），无需重复贡献。`);
     } else {
-      setCalibMsg(`${adapter.displayName} 暂无可贡献的校准，或尚未配置社区配置仓（COMMUNITY_REPO）。`);
+      setCalibMsg(`${adapter.displayName} 暂无可贡献的校准，或尚未配置社区配置仓。`);
     }
   }
 
@@ -123,27 +348,22 @@ export function App() {
     setCalibMsg(`已清除 ${adapter.displayName} 的全部本地校准。`);
   }
 
-  function overriddenRoles(adapterId: string): PickRole[] {
-    const sel = overrides[adapterId]?.selectors;
-    return sel ? (Object.keys(sel) as PickRole[]) : [];
-  }
-
   async function doExport() {
     const data = await exportOverrides();
     const json = JSON.stringify(data, null, 2);
     setTransferText(json);
     try {
       await navigator.clipboard.writeText(json);
-      setCalibMsg(`已导出 ${Object.keys(data).length} 个站点的校准到下方文本框，并复制到剪贴板。`);
+      setCalibMsg(`已导出 ${Object.keys(data).length} 个站点的校准到文本框，并复制到剪贴板。`);
     } catch {
-      setCalibMsg(`已导出到下方文本框（剪贴板不可用，请手动复制）。`);
+      setCalibMsg(`已导出到文本框（剪贴板不可用，请手动复制）。`);
     }
   }
 
   async function doImport() {
     const text = transferText.trim();
     if (!text) {
-      setCalibMsg('请先把另一个浏览器导出的 JSON 粘贴到下方文本框，再点导入。');
+      setCalibMsg('请先把另一个浏览器导出的 JSON 粘贴到文本框，再点导入。');
       return;
     }
     let parsed: UserOverrides;
@@ -158,357 +378,200 @@ export function App() {
     setCalibMsg(`已合并导入 ${n} 个站点的校准（同名项以导入为准）。`);
   }
 
-  function toggle(id: string) {
-    if (running) return;
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      if (!next.has(chairpersonId) && next.size > 0) {
-        setChairpersonId(Array.from(next)[0] ?? '');
-      } else if (next.size === 0) {
-        setChairpersonId('');
-      }
-      return next;
-    });
+  function tagsFor(id: string): string[] {
+    const ov = overrides[id];
+    if (!ov) return [];
+    const tags: string[] = [];
+    if (ov.selectors) for (const r of Object.keys(ov.selectors) as PickRole[]) tags.push(PICK_ROLE_LABELS[r]);
+    if (ov.thinkingActivation?.length) tags.push(`深度思考(${ov.thinkingActivation.length}步)`);
+    if (ov.thinkingState) tags.push('思考状态判别');
+    return tags;
   }
+  const hasOverride = (id: string) => tagsFor(id).length > 0;
 
-  async function closeAllTabs() {
-    if (!state.context.session) return;
-    const tabIds: number[] = [];
-    for (const leg of Object.values(state.context.session.legs)) {
-      if (leg.tabId != null) {
-        tabIds.push(leg.tabId);
-      }
-    }
-    if (tabIds.length > 0) {
-      try {
-        await chrome.tabs.remove(tabIds);
-      } catch (err) {
-        console.warn('Failed to close some tabs:', err);
-      }
-    }
-  }
-
-  async function start() {
-    const q = prompt.trim();
-    if (!q || running || chosen.length === 0 || !chairpersonId) return;
-    
-    await closeAllTabs();
-    
-    setAskedPrompt(q);
-    setLegs(Object.fromEntries(chosen.map((a) => [a.id, { kind: 'pending' } as LegView])));
-    send({ type: 'START', prompt: q, enableThinking, chairpersonId, adapters: chosen });
-  }
-
-  async function abort() {
-    if (!running) return;
-    // 先关掉本轮已开的全部 AI 窗口（按 session 记录的 tabId，已覆盖重开过的窗口），再让状态机停下。
-    await closeAllTabs();
-    send({ type: 'ABORT' });
-  }
-
-  async function resume() {
-    if (!config || !resumable || running) return;
-    const session = resumable;
-    setResumable(null);
-    setPrompt(session.prompt);
-    setAskedPrompt(session.prompt);
-    setEnableThinking(session.enableThinking);
-    setChairpersonId(session.chairpersonId ?? session.adapterIds[0] ?? '');
-    
-    const byId = new Map(config.adapters.map((a) => [a.id, a] as const));
-    const adapters = session.adapterIds.map((id) => byId.get(id)).filter((a): a is SiteAdapter => !!a);
-    setSelected(new Set(adapters.map((a) => a.id)));
-    
-    setLegs(
-      Object.fromEntries(
-        adapters.map((a) => {
-          const leg = session.legs[a.id];
-          return [a.id, leg?.status === 'done' && leg.text ? { kind: 'done', text: leg.text } as LegView : { kind: 'running' } as LegView];
-        }),
-      ),
+  if (!config) {
+    return (
+      <div style={{ display: 'grid', placeItems: 'center', height: '100vh', color: 'var(--text-2)', fontFamily: 'var(--font-sans)' }}>正在加载适配器配置…</div>
     );
-    
-    // Send a new initial event to machine to inject the session context
-    send({ type: 'RESUME', session, adapters });
   }
 
-  async function dismissResume() {
-    await clearSession();
-    setResumable(null);
-  }
+  const phaseLabel = running ? '议事进行中' : finished ? '已完成' : '空闲';
+  const phaseColor = running ? 'var(--running)' : finished ? 'var(--done)' : 'var(--text-3)';
+  const topQuestion = mode === 'archive' ? viewArchived?.prompt : mode === 'live' ? askedPrompt || liveSession?.prompt : '';
 
-  async function retry(adapter: SiteAdapter) {
-    const tabId = state.context.council?.tabs.get(adapter.id);
-    if (tabId == null || !askedPrompt) return;
-    setLegs((prev) => ({ ...prev, [adapter.id]: { kind: 'running' } }));
-    const r = await driveLeg(
-      adapter,
-      tabId,
-      askedPrompt,
-      { onLegStage: (id, stage) => setLegs((prev) => ({ ...prev, [id]: { kind: 'running', stage } })) },
-      { enableThinking },
-    );
-    setLegs((prev) => ({ ...prev, [adapter.id]: toView(r) }));
-  }
-
-  if (!config) return <main style={styles.page}>正在加载适配器配置…</main>;
-
+  const allModels = config.adapters.map((a) => ({ id: a.id, displayName: a.displayName }));
 
   return (
-    <main style={styles.page}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>集思 · Delphi</h1>
-        <p style={styles.subtitle}>
-          Phase 5 · 完整议会（三阶段评议）—— 状态：<strong style={{color: '#2b6cff'}}>{String(state.value)}</strong> —— 配置来源：{sourceLabel(source)}
-        </p>
-      </header>
-
-      {resumable && !running && (
-        <div style={styles.resumeBar}>
-          <span>
-            检测到上次未完成的议会（{new Date(resumable.createdAt).toLocaleString()}）：
-            「{resumable.prompt.slice(0, 30)}{resumable.prompt.length > 30 ? '…' : ''}」。是否续跑？
-            <span style={styles.resumeNote}>（已完成的站点直接沿用存档，不重复消耗额度）</span>
-          </span>
-          <span style={styles.resumeBtns}>
-            <button style={styles.smallBtn} onClick={resume}>恢复</button>
-            <button style={styles.resetBtn} onClick={dismissResume}>丢弃</button>
-          </span>
-        </div>
-      )}
-
-      <section style={styles.sites}>
-        {config.adapters.map((a) => (
-          <label key={a.id} style={{ ...styles.chip, ...(selected.has(a.id) ? styles.chipOn : {}) }}>
-            <input
-              type="checkbox"
-              checked={selected.has(a.id)}
-              disabled={running}
-              onChange={() => toggle(a.id)}
-              style={{ marginRight: 6 }}
-            />
-            {a.displayName}
-          </label>
-        ))}
-      </section>
-
-      <textarea
-        style={styles.textarea}
-        placeholder="输入要请教 AI 议会的问题…"
-        value={prompt}
-        disabled={running}
-        onChange={(e) => setPrompt(e.target.value)}
+    <div style={{ display: 'flex', height: '100vh' }}>
+      <Sidebar
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((c) => !c)}
+        theme={theme}
+        onTheme={setTheme}
+        archive={archive}
+        activeId={activeHist}
+        onSelect={selectHistory}
+        onNew={newCouncil}
+        onCalib={() => setCalibOpen((c) => !c)}
       />
 
-      <div style={styles.actionRow}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 14 }}>👑 主席：</span>
-          <select 
-            value={chairpersonId} 
-            onChange={(e) => setChairpersonId(e.target.value)}
-            disabled={running || chosen.length === 0}
-            style={styles.select}
-          >
-            {chosen.map(a => (
-              <option key={a.id} value={a.id}>{a.displayName}</option>
-            ))}
-          </select>
-        </div>
-        <button
-          style={{ ...styles.button, ...(running || !prompt.trim() || chosen.length === 0 ? styles.buttonOff : {}) }}
-          onClick={start}
-          disabled={running || !prompt.trim() || chosen.length === 0}
+      <main style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+        {/* top bar */}
+        <div
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 20,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '13px 28px',
+            background: 'color-mix(in srgb, var(--bg-solid) 82%, transparent)',
+            backdropFilter: 'blur(10px)',
+            borderBottom: '1px solid var(--border)',
+          }}
         >
-          {running ? `议事中…（${chosen.length} 家）` : `发起议事（${chosen.length} 家）`}
-        </button>
-        {running && (
-          <button style={styles.abortBtn} onClick={abort}>
-            ⏹ 中止议事
-          </button>
-        )}
-        {state.context.session && !running && (
-          <button style={styles.closeBtn} onClick={closeAllTabs}>
-            🧹 关闭所有 AI 窗口
-          </button>
-        )}
-        <label style={styles.thinkLabel}>
-          <input
-            type="checkbox"
-            checked={enableThinking}
-            disabled={running}
-            onChange={(e) => setEnableThinking(e.target.checked)}
-            style={{ marginRight: 6 }}
-          />
-          深度思考（默认开启；主席强制开，此开关仅影响其他成员。需先在校准里录「深度思考(多步)」与「思考状态(两态)」）
-        </label>
-      </div>
-
-      <details style={styles.calibBox}>
-        <summary style={styles.calibSummary}>适配校准（站点改版时自助修复选择器）</summary>
-        <p style={styles.calibHint}>
-          选择器随站点改版会失效。点「校准」打开该站点窗口，**校准操作全部在那个页面的顶部工具条上完成**
-          （点角色按钮 → 到页面点选元素；回答区点某条 AI 回复正文；深度思考多步在页内连续点选）。完成后点工具条「完成校准」即可。优先级：你的校准 &gt; 远程 &gt; 内置。
-          {COMMUNITY_REPO
-            ? ' 校准好的站点可点「贡献」提交到社区，审核后所有用户自动受益（ADR-0013）。'
-            : ''}
-        </p>
-        {calibMsg && <p style={styles.calibStatus}>{calibMsg}</p>}
-        <div style={styles.calibList}>
-          {config.adapters.map((a) => {
-            const roles = overriddenRoles(a.id);
-            const thinkSteps = overrides[a.id]?.thinkingActivation?.length ?? 0;
-            const hasState = !!overrides[a.id]?.thinkingState;
-            const hasAny = roles.length > 0 || thinkSteps > 0 || hasState;
-            const active = calibratingId === a.id;
-            const tags = [
-              ...roles.map((r) => PICK_ROLE_LABELS[r]),
-              ...(thinkSteps ? [`深度思考(${thinkSteps}步)`] : []),
-              ...(hasState ? ['思考状态判别'] : []),
-            ];
-            return (
-              <div key={a.id} style={styles.calibRow}>
-                <div style={styles.calibSite}>
-                  <strong>{a.displayName}</strong>
-                  <span style={styles.calibTag}>{tags.length ? `已校准：${tags.join('、')}` : '未校准'}</span>
-                </div>
-                <div style={styles.calibBtns}>
-                  {active ? (
-                    <span style={styles.recTag}>校准窗口已打开，请到该页面顶部工具条操作…</span>
-                  ) : (
-                    <button style={styles.smallBtn} disabled={!!calibratingId} onClick={() => startCalibrate(a)}>
-                      校准
-                    </button>
-                  )}
-                  {hasAny && !active && COMMUNITY_REPO && (
-                    <button style={styles.smallBtn} title="把此校准提交到社区，审核后所有用户受益" onClick={() => doContribute(a)}>
-                      贡献
-                    </button>
-                  )}
-                  {hasAny && !active && (
-                    <button style={styles.resetBtn} onClick={() => resetSite(a)}>
-                      重置
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {collapsed && (
+            <button className="dx-icon-btn" onClick={() => setCollapsed(false)}>
+              <Ic.panel style={{ fontSize: 17 }} />
+            </button>
+          )}
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7,
+              fontSize: 13,
+              fontWeight: 600,
+              color: phaseColor,
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 20,
+              padding: '5px 12px',
+              boxShadow: 'var(--shadow-raised)',
+            }}
+          >
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: phaseColor, animation: running ? 'pulse-dot 1.1s infinite' : 'none' }} />
+            {phaseLabel}
+          </div>
+          <div style={{ flex: 1, fontSize: 13.5, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {topQuestion}
+          </div>
+          <span style={{ fontSize: 12, color: 'var(--text-3)' }}>配置：{sourceLabel(source)}</span>
         </div>
 
-        <div style={styles.transferBox}>
-          <div style={styles.transferHead}>
-            <strong style={{ fontSize: 13 }}>跨浏览器对齐校准</strong>
-            <span style={styles.calibTag}>
-              在每个浏览器导出 → 汇总粘贴到一处 → 导入合并；用于把不同浏览器分别校准的站点拼到一起。
-            </span>
-          </div>
-          <textarea
-            style={styles.transferText}
-            placeholder="点「导出」把本浏览器校准填到这里；或粘贴其它浏览器导出的 JSON 后点「导入合并」。"
-            value={transferText}
-            onChange={(e) => setTransferText(e.target.value)}
-          />
-          <div style={styles.calibBtns}>
-            <button style={styles.smallBtn} onClick={doExport}>
-              导出本浏览器校准
-            </button>
-            <button style={styles.smallBtn} onClick={doImport}>
-              导入合并
-            </button>
-          </div>
-        </div>
-      </details>
+        <div style={{ maxWidth: 940, margin: '0 auto', padding: '26px 28px 120px' }}>
+          {resumable && !running && (
+            <RecoveryBar prompt={resumable.prompt} onResume={resume} onDiscard={dismissResume} />
+          )}
 
-      {state.context.session?.summary && (
-        <section style={styles.summaryBox}>
-          <h2 style={styles.summaryTitle}>
-            👑 主席综合结论 ({config.adapters.find(a => a.id === state.context.session?.chairpersonId)?.displayName})
-          </h2>
-          
-          {state.context.session.summary.finalAnswer || state.context.session.summary.consensus ? (
-            <>
-              <div style={styles.summaryItem}>
-                <h3 style={styles.summarySubtitle}>最终回答</h3>
-                <pre style={styles.answer}>{state.context.session.summary.finalAnswer}</pre>
+          {/* intro */}
+          {mode === 'idle' && !running && (
+            <div style={{ textAlign: 'center', padding: '16px 0 30px', animation: 'rise .4s ease both' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: 'var(--accent)',
+                  background: 'var(--accent-soft)',
+                  border: '1px solid var(--chair-bd)',
+                  borderRadius: 20,
+                  padding: '5px 13px',
+                  marginBottom: 16,
+                }}
+              >
+                <Ic.spark style={{ fontSize: 14 }} /> 多 AI 议会 · 德尔斐法
               </div>
-              
-              <div style={styles.summaryGrid}>
-                <div style={styles.summaryItem}>
-                  <h3 style={styles.summarySubtitle}>✅ 共识点</h3>
-                  <pre style={styles.answer}>{state.context.session.summary.consensus}</pre>
-                </div>
-                <div style={styles.summaryItem}>
-                  <h3 style={styles.summarySubtitle}>⚠️ 争议区</h3>
-                  <pre style={styles.answer}>{state.context.session.summary.disputes}</pre>
-                </div>
-              </div>
-              
-              <div style={styles.confidenceBox}>
-                <strong>置信度：</strong> <span style={styles.confidenceScore}>{state.context.session.summary.confidence}</span> / 100
-              </div>
-            </>
-          ) : (
-            <div style={styles.summaryItem}>
-              <h3 style={styles.summarySubtitle}>⚠️ 未匹配到格式化区块，显示原始回答：</h3>
-              <pre style={styles.answer}>{state.context.session.summary.rawText}</pre>
+              <h1 style={{ fontSize: 30, fontWeight: 800, margin: '0 0 10px', letterSpacing: '-.02em', lineHeight: 1.2 }}>
+                让多家 AI 各抒己见，
+                <br />
+                再为你收敛出一个可信结论
+              </h1>
+              <p style={{ fontSize: 15, color: 'var(--text-2)', lineHeight: 1.7, maxWidth: 560, margin: '0 auto' }}>
+                一个问题，交给多家 AI 独立作答、互相匿名评审、（可选）多轮辩论，最后由你指定的「主席」综合出共识点、争议区与置信度。零配置，复用你已登录的各家网页。
+              </p>
             </div>
           )}
-        </section>
-      )}
 
-      <section style={styles.results}>
-        {chosen.map((a) => {
-          const view = legs[a.id] ?? { kind: 'pending' as const };
-          return (
-            <article key={a.id} style={styles.card}>
-              <h2 style={styles.cardTitle}>
-                {a.displayName} <span style={styles.cardStatus}>{statusText(view)}</span>
-              </h2>
-              {view.kind === 'done' && <pre style={styles.answer}>{view.text}</pre>}
-              {view.kind === 'error' && (
-                <div>
-                  <p style={styles.error}>⚠️ {view.message}</p>
-                  {state.context.council?.tabs.has(a.id) && !running && (
-                    <button style={styles.retry} onClick={() => retry(a)}>
-                      重试（登录后点此重发）
-                    </button>
-                  )}
-                </div>
-              )}
-            </article>
-          );
-        })}
-      </section>
-    </main>
+          {/* calibration popover */}
+          <CalibrationPanel
+            open={calibOpen}
+            onClose={() => setCalibOpen(false)}
+            adapters={config.adapters}
+            busyId={calibratingId}
+            statusMsg={calibMsg}
+            communityRepo={!!COMMUNITY_REPO}
+            tagsFor={tagsFor}
+            hasOverride={hasOverride}
+            onCalibrate={startCalibrate}
+            onContribute={doContribute}
+            onReset={resetSite}
+            transferText={transferText}
+            setTransferText={setTransferText}
+            onExport={doExport}
+            onImport={doImport}
+          />
+
+          {/* picker + composer（仅在非回看时展示发起入口） */}
+          {!showingArchive && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18, marginBottom: 26 }}>
+              <ModelPicker models={allModels} selected={selected} chair={chairpersonId} onToggle={toggle} onChair={setChairpersonId} disabled={running} />
+              <Composer
+                value={prompt}
+                onChange={setPrompt}
+                deep={enableThinking}
+                setDeep={setEnableThinking}
+                debate={enableDebate}
+                setDebate={setEnableDebate}
+                running={running}
+                finished={finished}
+                onStart={start}
+                onAbort={abort}
+                onCloseTabs={closeAllTabs}
+                count={selected.size}
+              />
+            </div>
+          )}
+
+          {/* conclusion */}
+          {finished && summary && (
+            <div style={{ marginBottom: 26 }}>
+              <ConclusionPanel summary={summary} chairId={displayChair} chairName={nameOf(displayChair)} participated={participated} failed={failedCount} onAsk={askNative} />
+            </div>
+          )}
+
+          {/* progress cards */}
+          {legModels.length > 0 && (
+            <div style={{ marginBottom: 26 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 13 }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>成员运行进度</span>
+                <span style={{ fontSize: 12.5, color: 'var(--text-3)' }}>点击任一阶段查看该成员的完整原文</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gridAutoRows: '1fr', gap: 14, alignItems: 'stretch' }}>
+                {legModels.map((leg) => (
+                  <ProgressCard key={leg.id} leg={leg} onOpen={(legId, st) => setModal({ legId, stageKey: st })} onRetry={retry} onAsk={askNative} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* debate timeline */}
+          {displayDebate && displayDebate.rounds.length > 0 && (
+            <DebateTimeline debate={displayDebate} chairId={displayChair} nameOf={nameOf} reveal={reveal} onToggleReveal={() => setReveal((r) => !r)} />
+          )}
+        </div>
+      </main>
+
+      {modal && (() => {
+        const leg = legModels.find((l) => l.id === modal.legId);
+        if (!leg) return null;
+        return <DetailModal leg={leg} stageKey={modal.stageKey} onClose={() => setModal(null)} onStage={(s) => setModal((m) => (m ? { ...m, stageKey: s } : m))} onAsk={askNative} />;
+      })()}
+    </div>
   );
-}
-
-const CODE_LABEL: Partial<Record<NonNullable<LegResult['code']>, string>> = {
-  not_logged_in: '需要登录：请切到该站点的标签页登录后点「重试」',
-  captcha: '出现人机验证：请切到该站点的标签页手动通过后点「重试」',
-  input_not_found: '没找到输入框（页面结构可能变了）',
-  extraction_empty: '没抓到回答内容（页面结构可能变了）',
-  timeout: '等待生成超时',
-};
-
-function toView(r: LegResult): LegView {
-  if (r.ok && r.text) return { kind: 'done', text: r.text };
-  const friendly = r.code ? CODE_LABEL[r.code] : undefined;
-  return { kind: 'error', message: friendly ?? r.error ?? '未知错误' };
-}
-
-function statusText(v: LegView): string {
-  switch (v.kind) {
-    case 'pending':
-      return '待开始';
-    case 'running':
-      return v.stage ? STAGE_LABEL[v.stage] : '打开中…';
-    case 'done':
-      return '✅ 已完成';
-    case 'error':
-      return '❌ 失败';
-  }
 }
 
 function sourceLabel(s: ConfigSource | null): string {
@@ -516,150 +579,3 @@ function sourceLabel(s: ConfigSource | null): string {
   if (s === 'cache') return '缓存';
   return '内置兜底';
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    maxWidth: 820,
-    margin: '0 auto',
-    padding: '32px 24px',
-    fontFamily: 'system-ui, -apple-system, "PingFang SC", sans-serif',
-    color: '#1a1a1a',
-  },
-  header: { marginBottom: 20 },
-  title: { fontSize: 28, fontWeight: 700, margin: 0 },
-  subtitle: { color: '#666', marginTop: 6, fontSize: 14 },
-  sites: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
-  chip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    padding: '6px 12px',
-    border: '1px solid #d0d0d0',
-    borderRadius: 999,
-    fontSize: 14,
-    cursor: 'pointer',
-    userSelect: 'none',
-  },
-  chipOn: { borderColor: '#2b6cff', background: '#eef3ff', color: '#1a47b8' },
-  textarea: {
-    width: '100%',
-    minHeight: 110,
-    padding: 12,
-    fontSize: 15,
-    border: '1px solid #d0d0d0',
-    borderRadius: 8,
-    resize: 'vertical',
-    boxSizing: 'border-box',
-  },
-  button: {
-    marginTop: 12,
-    padding: '10px 20px',
-    fontSize: 15,
-    fontWeight: 600,
-    color: '#fff',
-    background: '#2b6cff',
-    border: 'none',
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
-  buttonOff: { background: '#b9c4d6', cursor: 'not-allowed' },
-  abortBtn: {
-    marginTop: 12,
-    padding: '10px 20px',
-    fontSize: 15,
-    fontWeight: 600,
-    color: '#fff',
-    background: '#c0392b',
-    border: 'none',
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
-  closeBtn: {
-    marginTop: 12,
-    padding: '10px 20px',
-    fontSize: 15,
-    fontWeight: 600,
-    color: '#555',
-    background: '#f3f3f5',
-    border: '1px solid #d0d0d0',
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
-  results: { marginTop: 24, display: 'grid', gap: 12 },
-  card: { border: '1px solid #ececf0', borderRadius: 10, padding: 16 },
-  cardTitle: { fontSize: 16, fontWeight: 600, margin: '0 0 8px' },
-  cardStatus: { fontSize: 13, fontWeight: 400, color: '#888', marginLeft: 8 },
-  answer: {
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
-    background: '#f7f7f8',
-    padding: 14,
-    borderRadius: 8,
-    fontSize: 14,
-    lineHeight: 1.6,
-    fontFamily: 'inherit',
-    margin: 0,
-  },
-  error: { color: '#c0392b', fontSize: 14, margin: '0 0 8px' },
-  retry: {
-    padding: '6px 14px',
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#2b6cff',
-    background: '#fff',
-    border: '1px solid #2b6cff',
-    borderRadius: 6,
-    cursor: 'pointer',
-  },
-  actionRow: { display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' },
-  thinkLabel: { fontSize: 13, color: '#555', display: 'inline-flex', alignItems: 'center', cursor: 'pointer' },
-  calibBox: { marginTop: 20, border: '1px solid #ececf0', borderRadius: 10, padding: '8px 16px' },
-  calibSummary: { fontSize: 14, fontWeight: 600, cursor: 'pointer', padding: '6px 0' },
-  calibHint: { fontSize: 12, color: '#888', lineHeight: 1.6, margin: '4px 0 8px' },
-  calibStatus: { fontSize: 13, color: '#1a47b8', background: '#eef3ff', padding: '8px 12px', borderRadius: 6, margin: '0 0 10px', wordBreak: 'break-all' },
-  calibList: { display: 'grid', gap: 8 },
-  calibRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '6px 0', borderTop: '1px solid #f3f3f5' },
-  calibSite: { display: 'flex', flexDirection: 'column', gap: 2 },
-  calibTag: { fontSize: 12, color: '#888' },
-  calibBtns: { display: 'flex', gap: 6, flexWrap: 'wrap' },
-  smallBtn: { padding: '5px 12px', fontSize: 13, fontWeight: 600, color: '#2b6cff', background: '#fff', border: '1px solid #2b6cff', borderRadius: 6, cursor: 'pointer' },
-  roleBtn: { padding: '5px 10px', fontSize: 12, color: '#333', background: '#f3f6ff', border: '1px solid #c9d8ff', borderRadius: 6, cursor: 'pointer' },
-  resetBtn: { padding: '5px 12px', fontSize: 13, color: '#c0392b', background: '#fff', border: '1px solid #e0b4b0', borderRadius: 6, cursor: 'pointer' },
-  recTag: { fontSize: 12, color: '#b8860b', alignSelf: 'center' },
-  transferBox: { marginTop: 14, paddingTop: 12, borderTop: '1px solid #ececf0', display: 'grid', gap: 8 },
-  transferHead: { display: 'flex', flexDirection: 'column', gap: 2 },
-  transferText: {
-    width: '100%',
-    minHeight: 96,
-    padding: 10,
-    fontSize: 12,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    border: '1px solid #d0d0d0',
-    borderRadius: 8,
-    resize: 'vertical',
-    boxSizing: 'border-box',
-  },
-  resumeBar: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-    flexWrap: 'wrap',
-    background: '#fff8e6',
-    border: '1px solid #f0d68a',
-    borderRadius: 8,
-    padding: '10px 14px',
-    fontSize: 13,
-    color: '#6b5310',
-    marginBottom: 16,
-  },
-  resumeNote: { color: '#9a8030', marginLeft: 4 },
-  resumeBtns: { display: 'flex', gap: 8, flexShrink: 0 },
-  select: { padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d0', fontSize: 14, background: '#fff' },
-  summaryBox: { marginTop: 24, padding: 20, borderRadius: 12, background: '#f5fbff', border: '1px solid #cce5ff' },
-  summaryTitle: { fontSize: 20, fontWeight: 700, margin: '0 0 16px', color: '#004085' },
-  summarySubtitle: { fontSize: 16, fontWeight: 600, margin: '0 0 8px', color: '#004085' },
-  summaryItem: { marginBottom: 16 },
-  summaryGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 },
-  confidenceBox: { marginTop: 16, padding: 12, background: '#fff', borderRadius: 8, border: '1px solid #cce5ff', textAlign: 'center', fontSize: 16 },
-  confidenceScore: { fontSize: 24, fontWeight: 700, color: '#2b6cff' },
-};
