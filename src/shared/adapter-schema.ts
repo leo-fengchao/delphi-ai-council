@@ -53,6 +53,12 @@ export const PICK_ROLE_LABELS: Record<PickRole, string> = {
 export type ThinkingDiscriminator =
   /** 某属性变为该值（如 aria-pressed="true"、data-state="active"）——最稳 */
   | { kind: 'attr'; name: string; value: string }
+  /**
+   * 某属性「包含」其中任一子串即判已开。用于同一指示物存在**多语言/多态**文案时
+   * （如 Gemini 模式按钮 aria-label：英文含 "Extended"、中文含 "扩展"），单条判别式即可双语覆盖。
+   * 校准自动 diff 不产出此类型，需在配置里直接指定。
+   */
+  | { kind: 'attrContains'; name: string; values: string[] }
   /** 开启时多出的 class（如 active / selected） */
   | { kind: 'class'; value: string }
   /** 文本包含该子串（如「已开启」） */
@@ -76,6 +82,13 @@ export interface ThinkingStateCheck {
 export interface AdapterInput {
   method: InputMethod;
   submit: SubmitMethod;
+  /**
+   * 可选：粘入超长文本时，本站会把内容自动转成附件（如 Kimi 的 .txt）而非填进输入框。
+   * 置 true 时，paste 注入只要「发送键被点亮」即视为已接收（内容进了附件），不再按输入框
+   * 文本长度判定成功、也不再走逐行/直写兜底——否则会出现「附件里一份 + 输入框文字再一份」
+   * 的重复发送。纯数据，可远程热更新（ADR-0005）。
+   */
+  pasteMayBecomeFile?: boolean;
 }
 
 export interface AdapterCompletion {

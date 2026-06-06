@@ -122,6 +122,10 @@ function matchesDiscriminator(el: HTMLElement, on: ThinkingStateCheck['on']): bo
   switch (on.kind) {
     case 'attr':
       return (el.getAttribute(on.name) ?? '') === on.value;
+    case 'attrContains': {
+      const v = el.getAttribute(on.name) ?? '';
+      return on.values.some((s) => v.includes(s));
+    }
     case 'class':
       return el.classList.contains(on.value);
     case 'text':
@@ -203,7 +207,7 @@ async function injectPrompt(input: Element, prompt: string, adapter: SiteAdapter
     setNativeValue(editable, prompt);
   } else {
     // contenteditable（ProseMirror / Quill / Lexical / Slate 等）。
-    await injectContentEditable(editable, prompt, adapter.input.method === 'paste');
+    await injectContentEditable(editable, prompt, adapter);
   }
   // 给框架（React/Vue）一拍时间消化 input 事件。
   await delay(jitter(120, 80));
@@ -228,7 +232,14 @@ function setNativeValue(el: HTMLTextAreaElement | HTMLInputElement, value: strin
  *   并行争用时，编辑器可能只先插入了第一行；若此时就判成功并发送，会只发出第一行（Gemini 阶段二实测）。
  *   故按「非空白字符数 ≥ 目标 90%」轮询等待，直到接近完整或超时，再返回；既避免发半句，也避免重复注入。
  */
-async function injectContentEditable(el: HTMLElement, text: string, preferPaste: boolean): Promise<void> {
+async function injectContentEditable(el: HTMLElement, text: string, adapter: SiteAdapter): Promise<void> {
+  const preferPaste = adapter.input.method === 'paste';
+  // 粘贴可能转附件的站点（Kimi）：内容进附件后输入框为空，得靠「发送键点亮」判已接收。
+  const pasteMayBecomeFile = adapter.input.pasteMayBecomeFile === true;
+  const sendEnabled = (): boolean => {
+    if (!adapter.selectors.sendButton) return false;
+    return queryElements(adapter.selectors.sendButton).some((b) => isVisible(b) && !isDisabled(b));
+  };
   const clearEditor = () => {
     el.focus();
     try {
@@ -255,6 +266,11 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
   // 故按行 insertText、行间 insertParagraph，逐行喂入，规避「整段含换行只进第一行」。
   // 必须 async 且**行间留拍**：密集同步 execCommand 会让 Gemini（Quill/Angular）渲染卡死；
   // 加 40ms 间隔后实测注入完整、发送键点亮（2026-06-04 Claude-in-Chrome 验证）。
+  //
+  // ⚠️ 仅作兜底，不能当首选：在 ProseMirror 类聊天框（ChatGPT / Claude）里，insertParagraph 被键位映射
+  //    当成 Enter = **发送**。逐行注入的第一个 insertParagraph 会把「仅第一行」提前发出去、其余行残留在
+  //    输入框（2026-06-04 实测 ChatGPT 复现：只发「请根据…交叉评审。」一行）。故 ProseMirror 站点必须先走
+  //    tryExec（整段 insertText 一次注入；实测含换行也能完整进框、且不触发发送），不要先碰逐行注入。
   const tryExecLines = async () => {
     el.focus();
     const lines = text.split('\n');
@@ -271,15 +287,46 @@ async function injectContentEditable(el: HTMLElement, text: string, preferPaste:
     );
   };
 
-  // 含换行的长文本优先走逐行注入；preferPaste 站点仍先试 paste（Kimi 等只认 paste）。
+  // 注入顺序（命中即停）：
+  //   - preferPaste 站点（Gemini/Kimi 等只认 paste）：paste 优先；Quill 这类「整段 insertText 停在首行」的
+  //     才退到逐行注入。
+  //   - 其余（ChatGPT/Claude = ProseMirror）：**先整段 tryExec**（实测含换行可完整注入且不误触发送），
+  //     逐行注入退为兜底——因为 ProseMirror 把逐行的 insertParagraph 当 Enter 会把首行提前发出去（见上）。
   const attempts = preferPaste
     ? [tryPaste, tryExecLines, tryExec, trySetText]
-    : [tryExecLines, tryExec, tryPaste, trySetText];
+    : [tryExec, tryExecLines, tryPaste, trySetText];
   for (const attempt of attempts) {
     clearEditor();
     await attempt(); // tryExecLines 为 async（行间留拍）；其余同步，await 无副作用
-    if (await waitForInjected(el, text, 4000)) return; // 等注入到接近完整再返回（命中即停）
+    // 转附件站点：文本进框算成功，发送键点亮（内容进了附件）也算成功——后者命中即停，
+    // 避免再走逐行/直写兜底把同一份内容又灌进输入框（与附件重复发两遍）。转附件需几秒，放宽超时。
+    if (pasteMayBecomeFile) {
+      if (await waitForInjectedOrAttachment(el, text, sendEnabled, 8000)) return;
+    } else if (await waitForInjected(el, text, 4000)) {
+      return; // 等注入到接近完整再返回（命中即停）
+    }
   }
+}
+
+/**
+ * 转附件站点的注入成功判定：输入框文本达 ~90%（普通短文本直接进框），或发送键被点亮
+ * （超长文本被站点转成附件，输入框为空但内容已被接收）。两者任一命中即返回 true。
+ */
+async function waitForInjectedOrAttachment(
+  el: HTMLElement,
+  text: string,
+  sendEnabled: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  const nonWs = (s: string) => s.replace(/\s+/g, '');
+  const need = Math.max(1, Math.floor(nonWs(text).length * 0.9));
+  const cur = () => nonWs(el.innerText ?? el.textContent ?? '').length;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (cur() >= need || sendEnabled()) return true;
+    await delay(100);
+  }
+  return cur() >= need || sendEnabled();
 }
 
 /** 编辑器当前文本的非空白字符数是否达到目标的 ~90%（容忍换行/空白被编辑器归一）。轮询至达标或超时。 */
@@ -317,14 +364,46 @@ async function submit(input: Element, adapter: SiteAdapter): Promise<void> {
     btn = getBtn();
   }
 
-  if (adapter.input.submit === 'clickButton') {
-    if (btn) {
-      robustClick(btn);
-      return;
+  const clickOnce = () => {
+    if (adapter.input.submit === 'clickButton') {
+      const b = getBtn();
+      if (b) {
+        robustClick(b);
+        return;
+      }
+      // 找不到/不可用按钮时退化为回车，避免整腿卡死。
     }
-    // 找不到/不可用按钮时退化为回车，避免整腿卡死。
+    pressEnter(input);
+  };
+
+  // 转附件站点（Kimi）：paste 出来的 .txt 附件需异步上传/解析，发送键往往在上传完成**之前**就已点亮。
+  // 此时点一次发送会被站点静默忽略——附件滞留输入框、消息没发出（实测 Kimi 交叉评审整段转附件场景）。
+  // 故这里不能「点一次就完事」：点击后校验「确实发出」（生成开始＝停止键出现，或输入框已清空＝发送键不再可用），
+  // 没发出就略等重试，直到发出或重试用尽。重试落到空输入框只会 no-op，不会重复发送。
+  if (adapter.input.pasteMayBecomeFile === true) {
+    const sent = () => isStopVisibleFor(adapter) || !getBtn();
+    for (let i = 0; i < 5; i++) {
+      clickOnce();
+      if (await waitFor(sent, 4000)) return;
+    }
+    return;
   }
-  pressEnter(input);
+
+  clickOnce();
+}
+
+/** 模块级「生成中（停止键可见）」判定，供 submit 校验发送是否真正触发；与 awaitCompletion 内同名逻辑一致。 */
+function isStopVisibleFor(adapter: SiteAdapter): boolean {
+  const { stopButton } = adapter.selectors;
+  const { stopButtonIconPrefix } = adapter.completion;
+  if (!stopButton) return false;
+  for (const el of queryElements(stopButton)) {
+    if (el.offsetWidth <= 0 || el.offsetHeight <= 0) continue;
+    // 收/停共用同一按钮的站点：仅当内部 SVG 图标是「停止」形状才算生成中。
+    if (stopButtonIconPrefix && !hasIconPrefix(el, stopButtonIconPrefix)) continue;
+    return true;
+  }
+  return false;
 }
 
 /** 派发完整的指针+鼠标事件序列，兼容监听 pointerdown/mousedown 而非 click 的实现。 */
@@ -367,15 +446,24 @@ function pressEnter(input: Element): void {
  * 回答尚未出现的空档**（ChatGPT 深度思考实测：思考结束停止键消失 ~5s 后回答才出现）——
  * 旧逻辑「停止键一消失即判完成」会在此空档误判完成→提前截止/抽空。
  *
- * 判完成的条件：停止键已消失，且短暂宽限内**没有重新出现**、且此时回答区**已非空**。
- * 若停止键消失时回答仍为空（思考空档），则继续等待其重新出现（作答阶段）或回答出现。
+ * 判完成的条件：停止键已消失，且在宽限窗口内**既不重新出现、回答也不再有任何活动**。
+ * 「回答活动」用两路信号并取（任一仍在变动即视为仍在输出，体现「内容还在流逝就没结束」）：
+ *   ① 回答文本长度仍在**增长**；② 回答元素子树有 DOM 变更（MutationObserver，覆盖长度不变的重渲染/分段停顿）。
+ * 为什么不能只看停止键：
+ *   - 通义千问实测（2026-06-04 Claude-in-Chrome）：停止键在仅输出 18 字时就转回「发送」键（stop 消失），
+ *     而正文随后继续从 18 字流式增长到 712 字——只看停止键会在第 18 字就误判完成、拦腰截断。
+ *   - DeepSeek/Kimi 等收发共用按钮的站点，作答中按钮也会因重渲染短暂变形 → 停止键瞬时消失，同理。
+ *   - ChatGPT 深度思考的「思考→作答空档」里回答仍为空（无活动），待作答开始（长度 0→N 或停止键重现）才算恢复。
+ * 因此：停止键消失后，只有当它持续不再出现、且回答两路活动信号都静默满 GAP_GRACE_MS，才判完成。
  */
 async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
   const { stopButton, assistantMessage } = adapter.selectors;
   const { idleMutationMs, maxWaitMs, stopButtonIconPrefix } = adapter.completion;
   const deadline = Date.now() + maxWaitMs;
-  /** 停止键消失后，留出的「确认不是思考→作答空档」宽限：等它重新出现或回答出现。 */
+  /** 停止键消失后，要求「停止键不再出现 + 回答两路活动信号都静默」持续这么久才判完成。 */
   const GAP_GRACE_MS = 6000;
+  /** 宽限窗口内的轮询间隔。 */
+  const GRACE_POLL_MS = 400;
 
   const isStopVisible = () => {
     for (const el of queryElements(stopButton ?? '')) {
@@ -385,6 +473,10 @@ async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
       return true;
     }
     return false;
+  };
+  const lastAnswerEl = (): HTMLElement | null => {
+    const els = queryElements(assistantMessage).filter(isVisible);
+    return els[els.length - 1] ?? null;
   };
   const answerLen = () => {
     let best = 0;
@@ -396,26 +488,78 @@ async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
     return best;
   };
 
+  // 回答子树活动观察器：任意 DOM 变更都刷新 lastActivity（仅观察「回答元素」本身，避免侧栏/全页噪声干扰）。
+  // 流式输出的元素可能被整段替换，故每轮 ensureObserver() 重新挂到最新的回答元素上。
+  let lastActivity = Date.now();
+  const obs: { observed: HTMLElement | null; mo: MutationObserver | null } = { observed: null, mo: null };
+  const ensureObserver = () => {
+    const el = lastAnswerEl();
+    if (el && el !== obs.observed) {
+      obs.mo?.disconnect();
+      obs.observed = el;
+      obs.mo = new MutationObserver(() => { lastActivity = Date.now(); });
+      obs.mo.observe(el, { childList: true, subtree: true, characterData: true });
+    }
+  };
+
   // 1) 若有 stopButton：先等生成真正开始（停止键出现，或回答开始有内容）。
   if (stopButton) {
-    const started = await waitFor(() => isStopVisible() || answerLen() > 0, 25000);
+    // 基线：进入时页面上「上一轮答案」的快照。多轮复用同一标签页（stage2 交叉评审 / stage3 主席）时，
+    // 上一轮答案仍在 DOM 中，若用「answerLen()>0」判已开始，会在本轮停止键尚未出现时瞬间为真 → 立刻进入
+    // 完成判定 → 把上一轮答案误当本轮结果抽走。故以基线区分：必须**出现停止键**，或出现**新的**答案活动
+    //（出现新的答案元素 / 文本长度超过基线），才算本轮生成已开始。
+    const baselineEl = lastAnswerEl();
+    const baselineLen = answerLen();
+    const started = await waitFor(
+      () => isStopVisible() || lastAnswerEl() !== baselineEl || answerLen() > baselineLen,
+      25000,
+    );
     if (started) {
+     try {
       while (Date.now() < deadline) {
         // 等停止键消失。
         const gone = await waitFor(() => !isStopVisible(), deadline - Date.now());
         if (!gone) throw new AdapterError('生成超时（stop 按钮未消失）', 'timeout');
-        // 宽限期内：若停止键重新出现 → 是思考→作答的空档，继续等；若期间回答出现 → 提前结束等待。
-        await waitFor(() => isStopVisible() || answerLen() > 0, GAP_GRACE_MS);
-        if (isStopVisible()) continue; // 作答阶段开始了，回到上面等它再次消失
-        // 停止键确实保持消失：回答非空即判完成；回答仍空则视作（空）完成，交给抽取报空。
+        // 停止键消失 ≠ 一定完成：可能是「思考→作答」空档，或作答中按钮重渲染的短暂消失，或停止键提前转回发送键（千问）。
+        // 真完成判据：停止键持续不再出现，且「回答活动」静默满 GAP_GRACE_MS。
+        // 「回答活动」= 文本长度增长 ‖ 回答子树 DOM 变更，二者任一发生都刷新 lastActivity（即「内容还在流逝就没结束」）。
+        let lastLen = answerLen();
+        ensureObserver();
+        lastActivity = Date.now();
+        let resumed = false;
+        for (;;) {
+          if (Date.now() > deadline) throw new AdapterError('生成超时', 'timeout');
+          await delay(GRACE_POLL_MS);
+          if (isStopVisible()) { resumed = true; break; } // 停止键回来了 → 作答阶段/闪烁恢复，回外层重等
+          ensureObserver();
+          const len = answerLen();
+          if (len !== lastLen) { lastLen = len; lastActivity = Date.now(); } // 文本还在长 → 视为有活动
+          if (Date.now() - lastActivity >= GAP_GRACE_MS) break; // 两路活动都静默够久 → 完成
+        }
+        if (resumed) continue;
+        // 停止键持续消失且回答两路活动都静默满 GAP_GRACE_MS → 真完成（回答仍空则交给抽取报空）。
         return;
       }
+     } finally {
+       obs.mo?.disconnect();
+     }
       throw new AdapterError('生成超时', 'timeout');
     }
-    // stopButton 没等到——可能选择器失效或生成极快，落到静默兜底。
+    // 生成始终未开始（停止键没出现、也没有新答案活动）。对配置了 stopButton 的站点，这通常意味着发送被
+    // **发送后弹出的验证码/登录态失效**拦住了（豆包实测：发送后弹验证码，生成不启动）。此时**绝不能**落到
+    // 静默兜底——那会把 DOM 里残留的「上一轮答案」当本轮结果抽走（基线只防误判完成，挡不住兜底抽取）。
+    // 故在此重检验证码/登录，命中则据实报错；否则报超时。统一让 UI 显示失败 + 「重试」，而非呈现陈旧答案。
+    obs.mo?.disconnect();
+    if (detectCaptcha(adapter)) {
+      throw new AdapterError('检测到人机验证，请在该标签页手动通过后点「重试」', 'captcha');
+    }
+    if (detectLoginWallStrong(adapter) || detectLoginWallByText()) {
+      throw new AdapterError('站点需要登录，请在已打开的标签页登录后点「重试」', 'not_logged_in');
+    }
+    throw new AdapterError('生成始终未开始（可能被验证码/登录拦截或选择器失效），未采用页面残留的旧回答', 'timeout');
   }
 
-  // 2) 静默兜底：assistantMessage 子树连续 idleMutationMs 无变更即视为完成。
+  // 2) 静默兜底（仅无 stopButton 的适配器）：assistantMessage 子树连续 idleMutationMs 无变更即视为完成。
   const target = queryFirst(assistantMessage)?.parentElement ?? document.body;
   await waitForIdle(target, idleMutationMs, deadline);
 }

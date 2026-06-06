@@ -61,7 +61,9 @@ const kimi: SiteAdapter = {
     assistantMessage: '.chat-content-item-assistant .markdown-container .markdown',
   },
   // Kimi 是自定义富文本编辑器（类 Lexical），只认 paste 注入，execCommand/直写都会被清空。
-  input: { method: 'paste', submit: 'clickButton' },
+  // 粘入超长文本（如交叉评审整段）时 Kimi 会自动转成 .txt 附件：此时输入框文本为空，故必须
+  // 以「发送键点亮」判定已接收，否则会退到逐行/直写兜底，导致附件 + 输入框文字重复发两遍。
+  input: { method: 'paste', submit: 'clickButton', pasteMayBecomeFile: true },
   // Kimi 的「深度思考」是切模型（2026-06-04 实测）：点当前模型 → 在弹层选「K2.6 思考」模型。
   // 判别按当前模型名文本含「K2.6 思考」。
   thinkingActivation: [
@@ -235,7 +237,7 @@ const claude: SiteAdapter = {
 const gemini: SiteAdapter = {
   id: 'gemini',
   displayName: 'Gemini',
-  version: 2,
+  version: 3,
   matches: ['https://gemini.google.com/*'],
   newChatUrl: 'https://gemini.google.com/app',
   selectors: {
@@ -249,18 +251,25 @@ const gemini: SiteAdapter = {
   },
   // 与千问同理：Quill/Angular 用 paste 注入才会更新内部状态、点亮发送、让回车生效。
   input: { method: 'paste', submit: 'enterKey' },
-  // Gemini 的「深度思考」即选模式/扩展（2026-06-04 实测校准）。三步：开模式菜单 → 选 Pro 模型 → 选「Pro 扩展」。
-  // 目标是默认用「Pro 扩展」（而非 Flash 扩展），故先切到 Pro 模型再选思考等级。
-  // 判别用模式按钮的 aria-label「当前模式为"Pro 扩展"」：非此模式才跑三步切换，已是则跳过。
-  // ⚠️ 含 Angular 动态标记 .ng-star-inserted 与正位（nth）菜单项，较脆；失效时重校准。
+  // Gemini「深度思考」=「3.1 Pro 模型 + Extended 思考等级」（2026-06-05 改版后实测重校准，中/英双语）。
+  // 改版后模型与思考等级在同一菜单里**拆成两条独立项**，且选模型会**关闭菜单**，故需开两次菜单：
+  //   ①开菜单 → ②选 Pro 模型(菜单随即关闭) → ③重开菜单 → ④展开「思考等级」子菜单 → ⑤选「扩展」。
+  // 菜单项无稳定 data-test-id/aria，改用文本 XPath（runtime 已支持），比旧版 nth/ng-star 稳。
+  // 双语兼容：模型名「3.1 Pro」中英一致(用 'Pro')；子菜单/档位用 `or` 同时匹配英文与中文文案。
+  // 用文本而非完整版本号匹配，亦抗模型版本号变动（如 3.1→3.2）。失效时重校准。
   thinkingActivation: [
     'button[data-test-id="bard-mode-menu-button"]',
-    'div.ng-star-inserted > div.popover-menu > gem-menu.ng-star-inserted > gem-menu-item.ng-star-inserted > gem-menu-item-content',
-    'div.cdk-overlay-pane > div.ng-star-inserted > gem-menu > gem-menu-item.ng-star-inserted > gem-menu-item-content.checkmark-only',
+    "//gem-menu-item[contains(., 'Pro')]",
+    'button[data-test-id="bard-mode-menu-button"]',
+    "//gem-menu-item[contains(., 'Thinking level') or contains(., '思考等级')]",
+    "//gem-menu-item[contains(., 'Extended') or contains(., '扩展')]",
   ],
+  // 开启后模式按钮 aria-label 含思考档位：英文「…currently Pro Extended」/ 中文「…当前模式为“Pro 扩展”」。
+  // 用 attrContains 双语判别：含 'Extended' 或 '扩展' 即视为已开，跳过重跑整套菜单。
+  // 仅作跳过优化：不命中只会多跑一次激活补齐（假阴性安全），不会误判已开而误关。
   thinkingState: {
     selector: 'button[data-test-id="bard-mode-menu-button"]',
-    on: { kind: 'attr', name: 'aria-label', value: '打开模式选择器，当前模式为“Pro 扩展”' },
+    on: { kind: 'attrContains', name: 'aria-label', values: ['Extended', '扩展'] },
   },
   completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 3000, maxWaitMs: 180000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },

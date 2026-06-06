@@ -246,6 +246,8 @@ export function describeThinkingDiscriminator(d: ThinkingDiscriminator): string 
   switch (d.kind) {
     case 'attr':
       return `属性 ${d.name}="${d.value}"`;
+    case 'attrContains':
+      return `属性 ${d.name} 含 ${d.values.map((v) => `「${v}」`).join('/')}`;
     case 'class':
       return `class .${d.value}`;
     case 'text':
