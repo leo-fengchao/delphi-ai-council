@@ -14,16 +14,20 @@ import type { AdapterConfig, SiteAdapter } from '../shared/adapter-schema';
 const deepseek: SiteAdapter = {
   id: 'deepseek',
   displayName: 'DeepSeek',
-  version: 2,
+  version: 3,
   matches: ['https://chat.deepseek.com/*'],
   newChatUrl: 'https://chat.deepseek.com/',
   selectors: {
-    inputBox: 'textarea#chat-input, textarea[placeholder], div[contenteditable="true"]',
-    sendButton: 'div[role="button"].ds-button--circle.ds-button--primary, div[role="button"][aria-disabled], button[type="submit"], div[role="button"][aria-label*="发送"], div[role="button"][aria-label*="Send" i]',
-    // DeepSeek 的「发送」与「停止」是输入框右下角同一个圆形按钮，类名/aria 完全相同，
-    // 只有内部 SVG 图标不同。故 stopButton 指向该圆形按钮，再用 completion.stopButtonIconPrefix
-    // 按图标形状区分「正在生成（停止方块）」与「已完成（发送箭头）」。2026-06-03 实测校准。
-    stopButton: 'div[role="button"].ds-button--circle.ds-button--primary',
+    // 输入框已无 #chat-input，靠 textarea[placeholder]（“给 DeepSeek 发送消息”）命中。2026-06-16 实测校准。
+    inputBox: 'textarea[placeholder], textarea#chat-input, div[contenteditable="true"]',
+    // 2026-06-16 实测：DeepSeek 发送/停止按钮改版，类名由 .ds-button--circle 变为
+    // .ds-button--primary.ds-button--filled.ds-button--capsule（圆形→胶囊）。旧选择器全部失效 →
+    // 发送退化为「等 15s 超时再合成回车」（不稳，后续轮次常发不出去）。禁用态用 class .ds-button--disabled
+    //（非 aria/attr，runtime isDisabled 抓不到），故发送键须 :not(.ds-button--disabled) 排除禁用态。
+    sendButton: 'div[role="button"].ds-button--primary.ds-button--filled:not(.ds-button--disabled)',
+    // 发送与停止仍是同一个胶囊按钮，类名相同、只有内部 SVG 图标不同：发送箭头 'M8.3125'、停止方块 'M2 4.88'。
+    // stopButton 指向该按钮，再用 completion.stopButtonIconPrefix 'M2 4.88' 按图标区分生成中/已完成。2026-06-16 实测校准。
+    stopButton: 'div[role="button"].ds-button--primary.ds-button--filled',
     // 必须用回答正文容器；不能用 [class*="ds-markdown"]（会过度匹配 ds-markdown-paragraph/ds-markdown-cite 子元素，取到末尾空引用角标）。
     assistantMessage: '.ds-assistant-message-main-content, .markdown-body',
   },
@@ -114,34 +118,40 @@ const qwen: SiteAdapter = {
 const doubao: SiteAdapter = {
   id: 'doubao',
   displayName: '豆包',
-  version: 4,
+  version: 5,
   matches: ['https://www.doubao.com/*'],
   newChatUrl: 'https://www.doubao.com/chat/',
   selectors: {
     inputBox: 'textarea.semi-input-textarea, textarea[placeholder*="发消息"]',
     sendButton: '#flow-end-msg-send',
     // 停止按钮（2026-06-04 用户 XPath 校准）：用 XPath 精确定位，取代原宽泛的 div[class*="stop"]
-    // （后者易误匹配导致刚发就误判完成/提前截止）。
+    // （后者易误匹配导致刚发就误判完成/提前截止）。2026-06-16 实测：生成中此 XPath 命中 0（豆包把整个
+    // 发送容器 .send-btn-wrapper 移除、停止键另置），故 isStopVisible 恒假、无害降级到「回答活动静默」判完成。
     stopButton: "//div[contains(@class,'items-center')]//div[@data-state='closed']",
-    // 回答正文容器（含 markdown 渲染）。
-    assistantMessage: '.flow-markdown-body',
+    // 回答正文容器：2026-06-16 实测改版，.flow-markdown-body 已不存在，正文容器改为 .md-box-root
+    //（container-XXX 为哈希动态类，md-box-root 稳定）。旧选择器失效会让 awaitCompletion 的「已开始」判定
+    // 永远不触发 → 25s 后抛「生成始终未开始」（即用户看到的「初次作答失败」），哪怕回答其实已生成。
+    assistantMessage: '.md-box-root',
   },
   // 豆包回车=换行，必须点发送按钮。
   input: { method: 'setNativeValue', submit: 'clickButton' },
-  // 深度思考=模式选择（2026-06-04 用户 XPath 校准）：①点模式选择按钮 ②在弹出菜单选「思考」。
-  // 第二步用 XPath 按文本 text()='思考' 命中（CSS 无法按文本选）。模式选择是单选式、重复选同一项幂等，
-  // 故不配 thinkingState：每轮直接确保选到「思考」即可，无误关风险。
+  // 深度思考=模式选择（2026-06-16 实测重校准）：①点模式选择按钮 ②在弹出菜单选「专家」。
+  // 改版后「深度思考」并入「专家」模式（菜单项文案＝「专家 / 深度思考 / 研究级智能模型」），
+  // 已无纯文本「思考」节点，故旧的 text()='思考' 失效。改按 contains(.,'专家') 命中专家菜单项。
+  // 模式选择是单选式、重复选同一项幂等，故不配 thinkingState：每轮直接确保选到「专家」即可，无误关风险。
   thinkingActivation: [
     'div[data-valid-btn="mode-select-action-btn"]',
-    "//div[@data-side='top' and @role='menu']//div[@role='menuitem']//*[text()='思考']",
+    "//*[@role='menu']//*[@role='menuitem'][contains(.,'专家')]",
   ],
   // 豆包流式中有搜索/图片/表格的停顿，静默阈值调大，避免抓到一半就误判完成。
   completion: { primarySignal: 'stopButtonDisappears', idleMutationMs: 4000, maxWaitMs: 120000 },
   extraction: { scope: 'lastAssistantMessage', format: 'text' },
   auth: {
     loggedOutSelector: 'button[class*="login"], a[href*="login"]',
-    // 豆包会弹图形验证码；命中常见验证码 iframe 即提示用户手动通过（运行时还有通用兜底）。
-    captchaSelector: 'iframe[src*="captcha"], iframe[src*="verify"]',
+    // 豆包会弹图形验证码（字节 rmc.bytedance.com 语义验证）。#captcha_container 是常见浮层根节点；
+    // 叠加字节验证 iframe / 通用 id/class 兜底。命中即提醒用户手动通过、通过后自动继续。
+    captchaSelector:
+      '#captcha_container, iframe[src*="rmc.bytedance.com"], iframe[src*="captcha"], iframe[src*="verify"], [id*="captcha" i], [class*="captcha" i], [id*="verify" i], [class*="verify" i]',
   },
 };
 

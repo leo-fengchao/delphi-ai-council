@@ -4,15 +4,15 @@
     {
       "id": "deepseek",
       "displayName": "DeepSeek",
-      "version": 2,
+      "version": 3,
       "matches": [
         "https://chat.deepseek.com/*"
       ],
       "newChatUrl": "https://chat.deepseek.com/",
       "selectors": {
-        "inputBox": "textarea#chat-input, textarea[placeholder], div[contenteditable=\"true\"]",
-        "sendButton": "div[role=\"button\"].ds-button--circle.ds-button--primary, div[role=\"button\"][aria-disabled], button[type=\"submit\"], div[role=\"button\"][aria-label*=\"发送\"], div[role=\"button\"][aria-label*=\"Send\" i]",
-        "stopButton": "div[role=\"button\"].ds-button--circle.ds-button--primary",
+        "inputBox": "textarea[placeholder], textarea#chat-input, div[contenteditable=\"true\"]",
+        "sendButton": "div[role=\"button\"].ds-button--primary.ds-button--filled:not(.ds-button--disabled)",
+        "stopButton": "div[role=\"button\"].ds-button--primary.ds-button--filled",
         "assistantMessage": ".ds-assistant-message-main-content, .markdown-body"
       },
       "input": {
@@ -61,7 +61,8 @@
       },
       "input": {
         "method": "paste",
-        "submit": "clickButton"
+        "submit": "clickButton",
+        "pasteMayBecomeFile": true
       },
       "thinkingActivation": [
         "div.current-model",
@@ -134,7 +135,7 @@
     {
       "id": "doubao",
       "displayName": "豆包",
-      "version": 4,
+      "version": 5,
       "matches": [
         "https://www.doubao.com/*"
       ],
@@ -143,7 +144,7 @@
         "inputBox": "textarea.semi-input-textarea, textarea[placeholder*=\"发消息\"]",
         "sendButton": "#flow-end-msg-send",
         "stopButton": "//div[contains(@class,'items-center')]//div[@data-state='closed']",
-        "assistantMessage": ".flow-markdown-body"
+        "assistantMessage": ".md-box-root"
       },
       "input": {
         "method": "setNativeValue",
@@ -151,7 +152,7 @@
       },
       "thinkingActivation": [
         "div[data-valid-btn=\"mode-select-action-btn\"]",
-        "//div[@data-side='top' and @role='menu']//div[@role='menuitem']//*[text()='思考']"
+        "//*[@role='menu']//*[@role='menuitem'][contains(.,'专家')]"
       ],
       "completion": {
         "primarySignal": "stopButtonDisappears",
@@ -164,7 +165,7 @@
       },
       "auth": {
         "loggedOutSelector": "button[class*=\"login\"], a[href*=\"login\"]",
-        "captchaSelector": "iframe[src*=\"captcha\"], iframe[src*=\"verify\"]"
+        "captchaSelector": "#captcha_container, iframe[src*=\"rmc.bytedance.com\"], iframe[src*=\"captcha\"], iframe[src*=\"verify\"], [id*=\"captcha\" i], [class*=\"captcha\" i], [id*=\"verify\" i], [class*=\"verify\" i]"
       }
     },
     {
@@ -282,7 +283,7 @@
     {
       "id": "gemini",
       "displayName": "Gemini",
-      "version": 2,
+      "version": 3,
       "matches": [
         "https://gemini.google.com/*"
       ],
@@ -299,15 +300,20 @@
       },
       "thinkingActivation": [
         "button[data-test-id=\"bard-mode-menu-button\"]",
-        "div.ng-star-inserted > div.popover-menu > gem-menu.ng-star-inserted > gem-menu-item.ng-star-inserted > gem-menu-item-content",
-        "div.cdk-overlay-pane > div.ng-star-inserted > gem-menu > gem-menu-item.ng-star-inserted > gem-menu-item-content.checkmark-only"
+        "//gem-menu-item[contains(., 'Pro')]",
+        "button[data-test-id=\"bard-mode-menu-button\"]",
+        "//gem-menu-item[contains(., 'Thinking level') or contains(., '思考等级')]",
+        "//gem-menu-item[contains(., 'Extended') or contains(., '扩展')]"
       ],
       "thinkingState": {
         "selector": "button[data-test-id=\"bard-mode-menu-button\"]",
         "on": {
-          "kind": "attr",
+          "kind": "attrContains",
           "name": "aria-label",
-          "value": "打开模式选择器，当前模式为“Pro 扩展”"
+          "values": [
+            "Extended",
+            "扩展"
+          ]
         }
       },
       "completion": {
