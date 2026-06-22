@@ -11,14 +11,10 @@ import { applyOverride, readAllOverrides, type UserOverrides } from '../shared/o
 
 /**
  * 远程配置源（ADR-0008，定稿 Q5 = GitHub raw）。
- * 留空则跳过远程**且不读缓存**、直接以内置兜底为准——开发/自用期把内置当唯一真源，
- * 避免「云端旧配置 + 6 小时缓存」盖掉刚改好的内置（用户覆盖仍最高优先）。
- * 要对外分发时再填公开仓库的 raw JSON URL，并在 wxt.config.ts 的 host_permissions 增补该域名。
- *
- * 注：开发自用期暂时留空（社区仓地址备忘）：
- *   https://raw.githubusercontent.com/leo-fengchao/delphi-config/refs/heads/main/adapter-config.json
+ * 对外测试版默认启用远程配置分发：站点选择器可由公开配置仓热更新。
+ * 若远程不可达，会按缓存 → 内置兜底降级；用户本地校准覆盖仍保持最高优先级。
  */
-const REMOTE_CONFIG_URL = '';
+const REMOTE_CONFIG_URL = 'https://raw.githubusercontent.com/leo-fengchao/delphi-config/refs/heads/main/adapter-config.json';
 
 const CACHE_KEY = 'delphi:adapterConfig';
 const CACHE_TS_KEY = 'delphi:adapterConfig:ts';
