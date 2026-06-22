@@ -18,3 +18,7 @@ agents.md
 gemini.md
 CLAUDE.md
 README.local.md
+
+# 内部研发交接笔记（本地留底，不随仓库分发）
+docs/HANDOVER-phase3.md
+docs/handover/
