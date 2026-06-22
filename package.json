@@ -1,9 +1,18 @@
 {
   "name": "delphi-ai-council",
-  "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "集思 · Delphi —— 浏览器插件版 AI 议会",
+  "description": "A browser extension that runs a multi-AI council across native AI web apps.",
+  "license": "GPL-3.0-only",
+  "author": "Fengchao",
+  "keywords": [
+    "browser-extension",
+    "chrome-extension",
+    "ai",
+    "delphi-method",
+    "wxt",
+    "react"
+  ],
   "scripts": {
     "predev": "node -e \"require('fs').mkdirSync('.dev-chrome-profile',{recursive:true})\"",
     "dev": "wxt",
