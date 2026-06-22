@@ -6,3 +6,15 @@ node_modules
 stats.html
 
 .dev-chrome-profile
+
+# 本地原型图，不随仓库分发
+Prototype UI.png
+
+# ==========================================
+# Local AI Agent Central Memory & Symlinks
+# ==========================================
+core_rules.md
+agents.md
+gemini.md
+CLAUDE.md
+README.local.md
