@@ -7,6 +7,7 @@ import { ModelMark } from '../ui/marks';
 import { StatusPill } from '../ui/primitives';
 import type { CardStatus } from '../ui/primitives';
 import { stageLabel, type LegModel, type StageKey } from '../leg-model';
+import type { ThinkingDecision } from '../../../shared/messaging';
 
 function StepRow({ leg, sKey, last, onOpen }: { leg: LegModel; sKey: StageKey; last: boolean; onOpen: (id: string, s: StageKey) => void }) {
   const st: CardStatus = leg.stageStates[sKey] ?? 'pending';
@@ -103,11 +104,17 @@ export function ProgressCard({
   leg,
   onOpen,
   onRetry,
+  onRetryManualThinking,
+  onRetryWithoutThinking,
+  onThinkingDecision,
   onAsk,
 }: {
   leg: LegModel;
   onOpen: (id: string, s: StageKey) => void;
   onRetry: (id: string) => void;
+  onRetryManualThinking: (id: string) => void;
+  onRetryWithoutThinking: (id: string) => void;
+  onThinkingDecision: (id: string, decision: ThinkingDecision) => void;
   onAsk: (id: string) => void;
 }) {
   const stages = leg.stages;
@@ -123,15 +130,19 @@ export function ProgressCard({
   // ⚠️ 卡片副标题：固定单行显示（见下方渲染处 whiteSpace:nowrap + ellipsis）。
   // 新增/修改任何文案都必须保证在一行内完整显示，否则会被截断成省略号且影响进度条对齐。
   const subline =
-    leg.status === 'pending'
-      ? '等待开始'
-      : leg.status === 'waiting'
-        ? '等待其他成员完成作答'
-        : leg.status === 'done'
-          ? '全部阶段完成'
-          : leg.status === 'failed'
-            ? leg.failReason || '执行失败'
-            : `${stageLabel(leg.current, leg.debateRound)} · 进行中`;
+    leg.awaitingThinkingDecision
+      ? '等待选择深度思考处理方式'
+      : leg.awaitingCaptcha
+      ? '⚠️ 出现验证码，等待手动处理'
+      : leg.status === 'pending'
+        ? '等待开始'
+        : leg.status === 'waiting'
+          ? '等待其他成员完成作答'
+          : leg.status === 'done'
+            ? '全部阶段完成'
+            : leg.status === 'failed'
+              ? leg.failReason || '执行失败'
+              : `${stageLabel(leg.current, leg.debateRound)} · 进行中`;
 
   return (
     <div
@@ -170,6 +181,84 @@ export function ProgressCard({
         <StatusPill status={leg.status} />
       </div>
 
+      {/* 验证码提醒横幅：出现人机验证时显眼提示用户去对应窗口手动处理，处理后自动继续。 */}
+      {leg.awaitingCaptcha && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '9px 12px',
+            borderRadius: 10,
+            background: 'var(--warn-bg)',
+            border: '1px solid var(--warn-bd)',
+            color: 'var(--warn)',
+            fontSize: 12.5,
+            fontWeight: 600,
+            lineHeight: 1.4,
+          }}
+        >
+          <span style={{ fontSize: 15, animation: 'pulse-dot 1.4s infinite' }}>⚠️</span>
+          <span>{leg.displayName} 出现验证码，请到该窗口手动通过，完成后将自动继续。</span>
+        </div>
+      )}
+
+      {leg.needsThinkingDecision && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'var(--warn-bg)',
+            border: '1px solid var(--warn-bd)',
+            color: 'var(--warn)',
+            fontSize: 12.5,
+            fontWeight: 600,
+            lineHeight: 1.45,
+          }}
+        >
+          <span>{leg.displayName} 未能自动切到深度思考。请到该窗口手动调整后继续，或改用非深度思考。</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button className="dx-btn dx-btn-ghost" onClick={() => onRetryManualThinking(leg.id)}>
+              <Ic.check style={{ fontSize: 13 }} /> 已手动开启
+            </button>
+            <button className="dx-btn dx-btn-ghost" onClick={() => onRetryWithoutThinking(leg.id)}>
+              非深度继续
+            </button>
+          </div>
+        </div>
+      )}
+
+      {leg.awaitingThinkingDecision && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'var(--warn-bg)',
+            border: '1px solid var(--warn-bd)',
+            color: 'var(--warn)',
+            fontSize: 12.5,
+            fontWeight: 600,
+            lineHeight: 1.45,
+          }}
+        >
+          <span>{leg.displayName} 未能自动切到深度思考。请到该窗口手动调整后继续，或改用非深度思考。</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button className="dx-btn dx-btn-ghost" onClick={() => onThinkingDecision(leg.id, 'manual')}>
+              <Ic.check style={{ fontSize: 13 }} /> 已手动开启
+            </button>
+            <button className="dx-btn dx-btn-ghost" onClick={() => onThinkingDecision(leg.id, 'skip')}>
+              非深度继续
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* progress bar */}
       <div style={{ height: 6, borderRadius: 6, background: 'var(--surface-inset)', boxShadow: 'var(--shadow-inset)', overflow: 'hidden' }}>
         <div
@@ -198,7 +287,7 @@ export function ProgressCard({
 
       {/* footer actions */}
       <div style={{ display: 'flex', gap: 8, marginTop: 'auto', paddingTop: 4 }}>
-        {leg.status === 'failed' ? (
+        {leg.status === 'failed' && !leg.needsThinkingDecision ? (
           <button className="dx-btn dx-btn-fail" onClick={() => onRetry(leg.id)}>
             <Ic.retry style={{ fontSize: 14 }} /> 重试
           </button>

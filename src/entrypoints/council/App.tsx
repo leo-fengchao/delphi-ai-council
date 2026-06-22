@@ -10,7 +10,7 @@ import { useMachine } from '@xstate/react';
 import { councilMachine } from '../../council-page/machine';
 import type { AdapterConfig, PickRole, SiteAdapter } from '../../shared/adapter-schema';
 import { PICK_ROLE_LABELS } from '../../shared/adapter-schema';
-import type { ProgressMessage } from '../../shared/messaging';
+import type { DelphiMessage, ProgressMessage, ThinkingDecision } from '../../shared/messaging';
 import { loadAdapterConfig, type ConfigSource } from '../../council-page/config-loader';
 import { driveLeg, type LegResult } from '../../council-page/orchestrator';
 import { openCalibration, startInPageCalibration, closeCalibration } from '../../council-page/calibration';
@@ -21,6 +21,7 @@ import {
   clearSession,
   loadArchive,
   archiveSession,
+  saveSession,
   type SessionState,
   type DebateState,
   type ArchivedSession,
@@ -40,6 +41,7 @@ import { CalibrationPanel } from './components/CalibrationPanel';
 const CODE_LABEL: Record<string, string> = {
   not_logged_in: '需要登录该站点（登录后点「重试」）',
   captcha: '出现人机验证（手动通过后点「重试」）',
+  thinking_setup_failed: '深度思考设置失败',
   input_not_found: '没找到输入框（页面结构可能变了）',
   extraction_empty: '没抓到回答内容（页面结构可能变了）',
   timeout: '等待生成超时',
@@ -48,7 +50,7 @@ const CODE_LABEL: Record<string, string> = {
 function toView(r: LegResult): LegView {
   if (r.ok && r.text) return { kind: 'done', text: r.text };
   const friendly = r.code ? CODE_LABEL[r.code] : undefined;
-  return { kind: 'error', message: friendly ?? r.error ?? '未知错误' };
+  return { kind: 'error', message: friendly ?? r.error ?? '未知错误', code: r.code };
 }
 
 /** 默认勾选的国内站点（海外站点需用户日常浏览器加载，见 README）。 */
@@ -76,6 +78,7 @@ export function App() {
   const [transferText, setTransferText] = useState('');
 
   const [resumable, setResumable] = useState<SessionState | null>(null);
+  const [thinkingDecisions, setThinkingDecisions] = useState<Record<string, { tabId?: number; message: string }>>({});
 
   // 主题、侧栏、历史回看、弹窗、辩论身份揭示
   const [theme, setTheme] = useTheme();
@@ -120,6 +123,18 @@ export function App() {
     });
   }, []);
 
+  useEffect(() => {
+    const listener = (msg: DelphiMessage, sender: chrome.runtime.MessageSender) => {
+      if (msg.type !== 'DELPHI_THINKING_DECISION_REQUIRED') return;
+      setThinkingDecisions((prev) => ({
+        ...prev,
+        [msg.adapterId]: { tabId: sender.tab?.id, message: msg.message },
+      }));
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
+  }, []);
+
   // —— 议会完成即归档 ——（dedup 由 archiveSession 负责；用 ref 防重复触发）
   const archivedRef = useRef<string | null>(null);
   useEffect(() => {
@@ -162,9 +177,10 @@ export function App() {
           machineValue: displayValue,
           live: showingArchive ? undefined : legs[a.id],
           chairpersonId: displayChair,
+          pendingThinkingDecision: !!thinkingDecisions[a.id],
         }),
       );
-  }, [displaySession, displayValue, showingArchive, legs, adapterById, displayChair]);
+  }, [displaySession, displayValue, showingArchive, legs, adapterById, displayChair, thinkingDecisions]);
 
   // idle（首页）不展示任何辩论时间线；否则按回看/实时取。
   const displayDebate: DebateState | null =
@@ -282,13 +298,50 @@ export function App() {
     setResumable(null);
   }
 
-  async function retry(id: string) {
+  async function disableThinkingForAdapter(id: string) {
+    const session = state.context.session;
+    if (!session) return;
+    const prev = session.thinkingDisabledAdapterIds ?? [];
+    if (!prev.includes(id)) {
+      session.thinkingDisabledAdapterIds = [...prev, id];
+      await saveSession(session);
+    }
+  }
+
+  async function retry(id: string, opts: { enableThinking?: boolean; skipThinkingSetup?: boolean } = {}) {
     const adapter = adapterById.get(id);
     const tabId = state.context.council?.tabs.get(id);
     if (!adapter || tabId == null || !askedPrompt) return;
     setLegs((prev) => ({ ...prev, [id]: { kind: 'running' } }));
-    const r = await driveLeg(adapter, tabId, askedPrompt, { onLegStage: (lid, stage) => setLegs((prev) => ({ ...prev, [lid]: { kind: 'running', stage } })) }, { enableThinking });
+    const r = await driveLeg(
+      adapter,
+      tabId,
+      askedPrompt,
+      { onLegStage: (lid, stage) => setLegs((prev) => ({ ...prev, [lid]: { kind: 'running', stage } })) },
+      { enableThinking: opts.enableThinking ?? enableThinking, skipThinkingSetup: opts.skipThinkingSetup },
+    );
     setLegs((prev) => ({ ...prev, [id]: toView(r) }));
+  }
+
+  async function resolveThinkingDecision(id: string, decision: ThinkingDecision) {
+    const pending = thinkingDecisions[id];
+    const tabId = pending?.tabId ?? state.context.council?.tabs.get(id);
+    if (decision === 'skip') await disableThinkingForAdapter(id);
+    setThinkingDecisions((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    if (tabId == null) return;
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'DELPHI_THINKING_DECISION_RESPONSE',
+        adapterId: id,
+        decision,
+      } satisfies DelphiMessage);
+    } catch (err) {
+      console.warn('send thinking decision failed', err);
+    }
   }
 
   async function askNative(id: string) {
@@ -552,7 +605,19 @@ export function App() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gridAutoRows: '1fr', gap: 14, alignItems: 'stretch' }}>
                 {legModels.map((leg) => (
-                  <ProgressCard key={leg.id} leg={leg} onOpen={(legId, st) => setModal({ legId, stageKey: st })} onRetry={retry} onAsk={askNative} />
+                  <ProgressCard
+                    key={leg.id}
+                    leg={leg}
+                    onOpen={(legId, st) => setModal({ legId, stageKey: st })}
+                    onRetry={retry}
+                    onRetryManualThinking={(id) => retry(id, { enableThinking: true, skipThinkingSetup: true })}
+                    onRetryWithoutThinking={async (id) => {
+                      await disableThinkingForAdapter(id);
+                      await retry(id, { enableThinking: false });
+                    }}
+                    onThinkingDecision={resolveThinkingDecision}
+                    onAsk={askNative}
+                  />
                 ))}
               </div>
             </div>

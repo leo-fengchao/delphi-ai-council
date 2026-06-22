@@ -19,19 +19,43 @@ export interface AskMessage {
   prompt: string;
   /** 可选：发送前点击「深度思考」开关（需该站点已校准 thinkingToggle，ADR-0009） */
   enableThinking?: boolean;
+  /** 用户已手动调整深度思考时，本次跳过自动调整，直接继续发送。 */
+  skipThinkingSetup?: boolean;
 }
 
-/** content script → Council Page：阶段性进度（可选，用于流式状态 UI）。 */
+/**
+ * content script → Council Page：阶段性进度（可选，用于流式状态 UI）。
+ * 'thinking' 表示发送前正在自动调整深度思考。
+ * 'captcha' 不是常规推进阶段，而是「出现人机验证、正等用户手动通过」的提醒态——
+ * 命中即在前台显眼提示，用户通过后运行时会自动继续并切回常规阶段（验证码自动等待）。
+ */
 export interface ProgressMessage {
   type: 'DELPHI_PROGRESS';
   adapterId: string;
-  stage: 'injecting' | 'submitted' | 'awaiting' | 'extracting';
+  stage: 'thinking' | 'injecting' | 'submitted' | 'awaiting' | 'extracting' | 'captcha';
+}
+
+export type ThinkingDecision = 'manual' | 'skip';
+
+/** content script → Council Page：自动设置深度思考失败，等待用户选择如何继续。 */
+export interface ThinkingDecisionRequiredMessage {
+  type: 'DELPHI_THINKING_DECISION_REQUIRED';
+  adapterId: string;
+  message: string;
+}
+
+/** Council Page → content script：用户已选择深度思考失败后的继续方式。 */
+export interface ThinkingDecisionResponseMessage {
+  type: 'DELPHI_THINKING_DECISION_RESPONSE';
+  adapterId: string;
+  decision: ThinkingDecision;
 }
 
 /** 失败分类码，便于前台精准分支（如未登录走专门的登录提示）。 */
 export type FailureCode =
   | 'not_logged_in'
   | 'captcha'
+  | 'thinking_setup_failed'
   | 'input_not_found'
   | 'timeout'
   | 'extraction_empty'
@@ -82,6 +106,8 @@ export type DelphiMessage =
   | ResultMessage
   | PingMessage
   | CalibrateMessage
-  | CalibrateDoneMessage;
+  | CalibrateDoneMessage
+  | ThinkingDecisionRequiredMessage
+  | ThinkingDecisionResponseMessage;
 
 export type AskResponse = Pick<ResultMessage, 'ok' | 'text' | 'format' | 'error' | 'code'>;

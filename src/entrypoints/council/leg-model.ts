@@ -7,6 +7,7 @@
    当前在途的 liveView，折叠成每个成员的 per-stage 状态与内容，供卡片/弹窗渲染。
    ============================================================ */
 import type { SessionState, LegStage } from '../../shared/session-state';
+import type { FailureCode } from '../../shared/messaging';
 import type { CardStatus } from './ui/primitives';
 
 /** Council 运行时每条腿的瞬时视图（由 orchestrator hooks 推送）。 */
@@ -14,7 +15,7 @@ export type LegView =
   | { kind: 'pending' }
   | { kind: 'running'; stage?: LegStage }
   | { kind: 'done'; text: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string; code?: FailureCode };
 
 export type StageKey = 'stage1' | 'stage2' | 'debate' | 'stage3';
 
@@ -36,10 +37,12 @@ export const STAGE_TAB_LABELS: Record<StageKey, string> = {
 };
 
 const SUBSTAGE_LABEL: Record<LegStage, string> = {
+  thinking: '设置深度思考…',
   injecting: '注入问题…',
   submitted: '已发送，生成中…',
   awaiting: '生成中…',
   extracting: '抽取回答…',
+  captcha: '⚠️ 出现验证码，请在该窗口手动处理…',
 };
 
 const RANK: Record<MachineValue, number> = {
@@ -61,7 +64,14 @@ export interface LegModel {
   stageStates: Record<string, CardStatus>;
   current: StageKey;
   subtext?: string;
+  /** 该腿正卡在人机验证、等用户手动通过（前台需显眼提醒；通过后运行时自动继续）。 */
+  awaitingCaptcha?: boolean;
+  /** 深度思考自动设置失败，需要用户选择手动调整后继续，或非深度继续。 */
+  needsThinkingDecision?: boolean;
+  /** 运行中正在等待用户决定深度思考失败后的继续方式。 */
+  awaitingThinkingDecision?: boolean;
   failReason?: string;
+  failureCode?: FailureCode;
   summaries: Partial<Record<StageKey, string>>;
   texts: Partial<Record<StageKey, string>>;
   debateRound?: number;
@@ -72,6 +82,7 @@ export interface DeriveCtx {
   machineValue: MachineValue;
   live?: LegView;
   chairpersonId: string;
+  pendingThinkingDecision?: boolean;
 }
 
 function preview(text: string | undefined, max = 96): string {
@@ -96,7 +107,7 @@ export function deriveLeg(
   adapter: { id: string; displayName: string },
   ctx: DeriveCtx,
 ): LegModel {
-  const { session, machineValue, live, chairpersonId } = ctx;
+  const { session, machineValue, live, chairpersonId, pendingThinkingDecision } = ctx;
   const id = adapter.id;
   const isChair = id === chairpersonId;
   const rank = RANK[machineValue];
@@ -136,6 +147,9 @@ export function deriveLeg(
       stageStates,
       current: 'stage1',
       failReason: failText(live),
+      failureCode: live?.kind === 'error' ? live.code : undefined,
+      needsThinkingDecision: live?.kind === 'error' && live.code === 'thinking_setup_failed',
+      awaitingThinkingDecision: pendingThinkingDecision,
       summaries,
       texts,
     };
@@ -226,6 +240,7 @@ export function deriveLeg(
     machineValue,
     summary,
     chairpersonId,
+    pendingThinkingDecision,
   });
 }
 
@@ -251,6 +266,7 @@ function finalize(args: {
   machineValue: MachineValue;
   summary: SessionState['summary'];
   chairpersonId: string;
+  pendingThinkingDecision?: boolean;
 }): LegModel {
   const { stages, stageStates, summaries, texts, isChair, machineValue, summary, live } = args;
   const rank = RANK[machineValue];
@@ -291,6 +307,9 @@ function finalize(args: {
 
   let subtext: string | undefined;
   if (status === 'running' && live?.kind === 'running' && live.stage) subtext = SUBSTAGE_LABEL[live.stage];
+  // 正卡在验证码：让卡片显眼提示并自动继续（不需手动重试）。
+  const awaitingCaptcha = live?.kind === 'running' && live.stage === 'captcha';
+  const failureCode = live?.kind === 'error' ? live.code : undefined;
 
   return {
     id: args.id,
@@ -301,6 +320,10 @@ function finalize(args: {
     stageStates,
     current,
     subtext,
+    awaitingCaptcha,
+    needsThinkingDecision: failureCode === 'thinking_setup_failed',
+    awaitingThinkingDecision: args.pendingThinkingDecision,
+    failureCode,
     summaries,
     texts,
     debateRound: args.debateRound,

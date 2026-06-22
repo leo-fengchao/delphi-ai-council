@@ -515,6 +515,7 @@ export const councilMachine = setup({
             id: `s_${Date.now()}`,
             prompt: event.prompt,
             enableThinking: event.enableThinking,
+            thinkingDisabledAdapterIds: undefined,
             enableDebate: event.enableDebate,
             createdAt: Date.now(),
             updatedAt: Date.now(),

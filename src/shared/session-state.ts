@@ -11,7 +11,7 @@
 import type { FailureCode } from './messaging';
 
 export type LegStatus = 'pending' | 'running' | 'done' | 'failed';
-export type LegStage = 'injecting' | 'submitted' | 'awaiting' | 'extracting';
+export type LegStage = 'thinking' | 'injecting' | 'submitted' | 'awaiting' | 'extracting' | 'captcha';
 
 /** 单条腿（单个 AI 一次作答）的状态。 */
 export interface LegState {
@@ -60,6 +60,8 @@ export interface SessionState {
   id: string;
   prompt: string;
   enableThinking: boolean;
+  /** 本场议会内用户已明确选择「非深度继续」的站点，后续阶段不再尝试开启深度思考。 */
+  thinkingDisabledAdapterIds?: string[];
   /** 是否启用多轮辩论（Phase 8 / ADR-0014，用户开关默认关） */
   enableDebate?: boolean;
   createdAt: number;

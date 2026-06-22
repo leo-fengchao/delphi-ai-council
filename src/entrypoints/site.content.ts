@@ -10,7 +10,7 @@
 
 import { matchAdapter } from '../shared/adapter-schema';
 import { LOCAL_ADAPTER_CONFIG, ALL_MATCHES } from '../adapters/local-config';
-import type { AskMessage, DelphiMessage, AskResponse } from '../shared/messaging';
+import type { AskMessage, DelphiMessage, AskResponse, ThinkingDecision } from '../shared/messaging';
 import { runAdapter, AdapterError } from '../adapters/runtime';
 import { applyOverride, readSiteOverride } from '../shared/overrides';
 import { runCalibrationToolbar } from '../adapters/calibration-overlay';
@@ -56,14 +56,34 @@ export default defineContentScript({
         const text = await runAdapter(
           adapter,
           msg.prompt,
-          { onStage: (stage) => chrome.runtime.sendMessage({ type: 'DELPHI_PROGRESS', adapterId: adapter.id, stage }) },
-          { enableThinking: msg.enableThinking },
+          {
+            onStage: (stage) => chrome.runtime.sendMessage({ type: 'DELPHI_PROGRESS', adapterId: adapter.id, stage }),
+            onThinkingSetupFailed: (message) => waitForThinkingDecision(adapter.id, message),
+          },
+          { enableThinking: msg.enableThinking, skipThinkingSetup: msg.skipThinkingSetup },
         );
         return { ok: true, text, format: adapter.extraction.format };
       } catch (err) {
         if (err instanceof AdapterError) return { ok: false, error: err.message, code: err.code };
         return { ok: false, error: String(err), code: 'unknown' };
       }
+    }
+
+    function waitForThinkingDecision(adapterId: string, message: string): Promise<ThinkingDecision> {
+      chrome.runtime.sendMessage({ type: 'DELPHI_THINKING_DECISION_REQUIRED', adapterId, message });
+      return new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          chrome.runtime.onMessage.removeListener(listener);
+          reject(new AdapterError('等待深度思考处理选择超时，请重试该成员。', 'thinking_setup_failed'));
+        }, 5 * 60 * 1000);
+        const listener = (reply: DelphiMessage) => {
+          if (reply.type !== 'DELPHI_THINKING_DECISION_RESPONSE' || reply.adapterId !== adapterId) return;
+          window.clearTimeout(timeout);
+          chrome.runtime.onMessage.removeListener(listener);
+          resolve(reply.decision);
+        };
+        chrome.runtime.onMessage.addListener(listener);
+      });
     }
   },
 });

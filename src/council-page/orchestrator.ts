@@ -44,6 +44,8 @@ export interface BroadcastHooks {
 export interface DriveOptions {
   /** 发送前点击各站点的「深度思考」开关（需已校准 thinkingToggle，ADR-0009） */
   enableThinking?: boolean;
+  /** 用户已手动调整深度思考时，跳过自动调整步骤。 */
+  skipThinkingSetup?: boolean;
 }
 
 export interface BroadcastOutcome {
@@ -160,8 +162,10 @@ export async function driveLegResilient(
   hooks: BroadcastHooks,
 ): Promise<LegResult> {
   await patchLeg(session, adapter.id, { status: 'running', stage: undefined, error: undefined, code: undefined });
-  // 主席全程强制开启深度思考；其余成员跟随用户开关（Phase 7 / ADR-0016）。
-  const thinking = session.enableThinking || adapter.id === session.chairpersonId;
+  // 主席默认强制开启深度思考；其余成员跟随用户开关（Phase 7 / ADR-0016）。
+  // 但若用户已对该站点明确选择「非深度继续」，本场议会后续阶段都尊重该选择，不再重复询问。
+  const thinkingDisabled = session.thinkingDisabledAdapterIds?.includes(adapter.id) ?? false;
+  const thinking = !thinkingDisabled && (session.enableThinking || adapter.id === session.chairpersonId);
   const options: DriveOptions = { enableThinking: thinking };
 
   for (let attempt = 0; attempt <= MAX_AUTO_RECOVER; attempt++) {
@@ -228,6 +232,7 @@ export async function driveLeg(
       type: 'DELPHI_ASK',
       prompt,
       enableThinking: options.enableThinking,
+      skipThinkingSetup: options.skipThinkingSetup,
     })) as AskResponse;
   } catch (err) {
     res = { ok: false, error: String(err), code: 'unknown' };

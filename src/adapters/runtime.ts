@@ -7,11 +7,12 @@
  */
 
 import type { SiteAdapter, ThinkingStateCheck } from '../shared/adapter-schema';
+import type { ThinkingDecision } from '../shared/messaging';
 
 export class AdapterError extends Error {
   constructor(
     message: string,
-    readonly code: 'not_logged_in' | 'captcha' | 'input_not_found' | 'timeout' | 'extraction_empty',
+    readonly code: 'not_logged_in' | 'captcha' | 'thinking_setup_failed' | 'input_not_found' | 'timeout' | 'extraction_empty',
   ) {
     super(message);
     this.name = 'AdapterError';
@@ -19,12 +20,15 @@ export class AdapterError extends Error {
 }
 
 export interface RunHooks {
-  onStage?: (stage: 'injecting' | 'submitted' | 'awaiting' | 'extracting') => void;
+  onStage?: (stage: 'thinking' | 'injecting' | 'submitted' | 'awaiting' | 'extracting' | 'captcha') => void;
+  onThinkingSetupFailed?: (message: string) => Promise<ThinkingDecision>;
 }
 
 export interface RunOptions {
   /** 发送前确保「深度思考」为开启态（按 adapter.thinkingActivation 步骤，ADR-0009 / Phase 7） */
   enableThinking?: boolean;
+  /** 用户已在前台手动调整到深度思考时，跳过自动调整步骤。 */
+  skipThinkingSetup?: boolean;
 }
 
 /** 在当前页面（content script 上下文）就一个 prompt 走完单腿。返回抽取到的文本。 */
@@ -34,10 +38,9 @@ export async function runAdapter(
   hooks: RunHooks = {},
   options: RunOptions = {},
 ): Promise<string> {
-  // 进站即检测人机验证（验证码/滑块）：命中就让用户去手动通过，别白跑。
-  if (detectCaptcha(adapter)) {
-    throw new AdapterError('检测到人机验证，请在该标签页手动通过后点「重试」', 'captcha');
-  }
+  // 进站即检测人机验证（验证码/滑块）：命中则**提醒前台并原地等待用户手动通过**，通过后自动继续
+  //（豆包等「验证码自动等待」）。不再直接报错让用户手点「重试」。
+  await waitForCaptchaResolved(adapter, hooks);
   // 进站即用「强信号」快速判一次登录墙（密码框 / 登录链接），避免白等 10 秒。
   // 强信号不会在已登录的聊天页误命中。
   if (detectLoginWallStrong(adapter)) {
@@ -47,28 +50,48 @@ export async function runAdapter(
   hooks.onStage?.('injecting');
 
   // 发送前按需开启「深度思考」（ADR-0009 / Phase 7 ADR-0016）。
-  if (options.enableThinking) {
-    await ensureThinkingOn(adapter);
+  if (options.enableThinking && !options.skipThinkingSetup) {
+    hooks.onStage?.('thinking');
+    await ensureThinkingOn(adapter, hooks);
   }
 
-  const input = await waitForElement(adapter.selectors.inputBox, 10000);
-  if (!input) {
-    // 找不到输入框：先看是不是被验证码挡住，再叠加登录墙启发式（此时已无输入框，误判风险低）。
-    if (detectCaptcha(adapter)) {
-      throw new AdapterError('检测到人机验证，请在该标签页手动通过后点「重试」', 'captcha');
+  // 注入→发送→等生成：整段可重试。豆包实测：**发送后才弹验证码、生成不启动**——此时等用户手动
+  // 通过后必须重注入重发（验证码拦住的那次发送已作废）。重试有限次，避免病态死循环。
+  const MAX_CAPTCHA_RETRY = 3;
+  for (let attempt = 0; ; attempt++) {
+    const input = await waitForElement(adapter.selectors.inputBox, 10000);
+    if (!input) {
+      // 找不到输入框：先看是不是被验证码挡住——是则提醒并等其解除后重试整段；
+      // 否则叠加登录墙启发式（此时已无输入框，误判风险低）。
+      if (detectCaptcha(adapter) && attempt < MAX_CAPTCHA_RETRY) {
+        await waitForCaptchaResolved(adapter, hooks);
+        hooks.onStage?.('injecting');
+        continue;
+      }
+      if (detectLoginWallStrong(adapter) || detectLoginWallByText()) {
+        throw new AdapterError('站点需要登录，请在已打开的标签页登录后点「重试」', 'not_logged_in');
+      }
+      throw new AdapterError('未找到输入框（选择器可能已失效）', 'input_not_found');
     }
-    if (detectLoginWallStrong(adapter) || detectLoginWallByText()) {
-      throw new AdapterError('站点需要登录，请在已打开的标签页登录后点「重试」', 'not_logged_in');
+    await injectPrompt(input, prompt, adapter);
+
+    hooks.onStage?.('submitted');
+    await submit(input, adapter);
+
+    hooks.onStage?.('awaiting');
+    try {
+      await awaitCompletion(adapter, hooks);
+      break; // 生成完成，跳出重试循环。
+    } catch (err) {
+      // 仅「发送后弹验证码导致生成未启动」（awaitCompletion 据实抛 captcha）才重试：等用户手动通过后重发。
+      if (err instanceof AdapterError && err.code === 'captcha' && attempt < MAX_CAPTCHA_RETRY) {
+        await waitForCaptchaResolved(adapter, hooks);
+        hooks.onStage?.('injecting');
+        continue;
+      }
+      throw err; // 其它失败（超时/登录等）照常上抛。
     }
-    throw new AdapterError('未找到输入框（选择器可能已失效）', 'input_not_found');
   }
-  await injectPrompt(input, prompt, adapter);
-
-  hooks.onStage?.('submitted');
-  await submit(input, adapter);
-
-  hooks.onStage?.('awaiting');
-  await awaitCompletion(adapter);
 
   hooks.onStage?.('extracting');
   const text = extract(adapter);
@@ -85,20 +108,41 @@ export async function runAdapter(
  * 多步站点（豆包/Kimi）后一步元素常要等前一步点击后才出现，故每步「等待→点击→略等」。
  * 未校准或某步失败都不阻断主流程（尽力而为，仍继续发送）。
  */
-async function ensureThinkingOn(adapter: SiteAdapter): Promise<void> {
+async function ensureThinkingOn(adapter: SiteAdapter, hooks: RunHooks): Promise<void> {
   const state = adapter.thinkingState;
   if (state && isThinkingOn(state)) return; // 已开，避免误关
 
   const steps = adapter.thinkingActivation;
-  if (!steps?.length) return;
+  if (!steps?.length) {
+    if (state) {
+      await resolveThinkingSetupFailure(hooks, '深度思考已开启，但该站点缺少自动开启步骤。请手动调整后继续，或改用非深度思考。');
+    }
+    return;
+  }
   for (const selector of steps) {
     const step = await waitForElement(selector, 4000);
-    if (!step) break; // 某步元素没出现：放弃后续步骤，但仍继续发送。
+    if (!step) {
+      if (state) {
+        await resolveThinkingSetupFailure(hooks, '未找到深度思考开关。请在该 AI 网页手动调整到深度思考后继续，或改用非深度思考。');
+        return;
+      }
+      break; // 无状态判别时仍沿用尽力而为，避免旧配置误阻断。
+    }
     robustClick(step as HTMLElement);
     await delay(jitter(350, 250));
     // 若每步点击后即可判定「已开」，提前结束剩余步骤，进一步降低误操作概率。
     if (state && isThinkingOn(state)) return;
   }
+  if (state && !isThinkingOn(state)) {
+    await resolveThinkingSetupFailure(hooks, '自动设置深度思考后仍未检测到开启状态。请手动调整后继续，或改用非深度思考。');
+  }
+}
+
+async function resolveThinkingSetupFailure(hooks: RunHooks, message: string): Promise<void> {
+  if (!hooks.onThinkingSetupFailed) {
+    throw new AdapterError(message, 'thinking_setup_failed');
+  }
+  await hooks.onThinkingSetupFailed(message);
 }
 
 /**
@@ -145,14 +189,40 @@ function matchesDiscriminator(el: HTMLElement, on: ThinkingStateCheck['on']): bo
  * 仅用强信号，避免误命中正常页面。
  */
 function detectCaptcha(adapter: SiteAdapter): boolean {
+  // 必须要求命中元素**可见**：验证码通过后站点常把容器留在 DOM 里仅置 display:none，
+  // 若不判可见会一直误命中 → waitForCaptchaResolved 永不返回（卡死自动继续）。验证码激活时一定是全屏可见浮层。
   const sel = adapter.auth?.captchaSelector;
-  if (sel && queryFirst(sel)) return true;
+  if (sel && queryElements(sel).some(isVisible)) return true;
   // 常见验证码服务的 iframe（极验 / 腾讯防水墙 / Cloudflare Turnstile / hCaptcha / reCAPTCHA）。
   const captchaIframe =
     'iframe[src*="geetest"], iframe[src*="captcha"], iframe[src*="turnstile"],' +
-    'iframe[src*="hcaptcha"], iframe[src*="recaptcha"], iframe[title*="验证"]';
-  if (document.querySelector(captchaIframe)) return true;
+    'iframe[src*="hcaptcha"], iframe[src*="recaptcha"], iframe[src*="rmc.bytedance.com"], iframe[title*="验证"]';
+  if (queryElements(captchaIframe).some(isVisible)) return true;
+  const textRe = /(验证码|人机验证|安全验证|拖动滑块|完成验证|verify you are human|verification)/i;
+  for (const el of document.querySelectorAll<HTMLElement>('[role="dialog"], [aria-modal="true"], div, section')) {
+    if (!isVisible(el)) continue;
+    const text = (el.innerText ?? el.textContent ?? '').trim();
+    if (text && text.length < 300 && textRe.test(text)) return true;
+  }
   return false;
+}
+
+/**
+ * 人机验证「提醒前台 + 等待手动通过 + 自动继续」（豆包等）。
+ * - 未命中验证码：立即返回（无副作用），不影响正常流程。
+ * - 命中：经 onStage('captcha') 在前台显眼提醒「出现验证码，请在该窗口手动处理」，随后原地轮询，
+ *   直至验证码消失（用户已手动通过）即自动继续；超过 maxWaitMs 仍未通过则抛 captcha，退回「手动重试」兜底。
+ */
+async function waitForCaptchaResolved(adapter: SiteAdapter, hooks: RunHooks): Promise<void> {
+  if (!detectCaptcha(adapter)) return;
+  hooks.onStage?.('captcha'); // 前台显眼提醒：出现验证码，请手动处理。
+  const MAX_WAIT_MS = 5 * 60 * 1000; // 给用户充足时间手动通过。
+  const resolved = await waitFor(() => !detectCaptcha(adapter), MAX_WAIT_MS);
+  if (!resolved) {
+    throw new AdapterError('验证码超时未处理，请在该标签页手动通过后点「重试」', 'captcha');
+  }
+  // 通过后略等，让站点状态稳定（验证码 iframe 卸载、页面恢复可交互）后再继续。
+  await delay(jitter(800, 400));
 }
 
 /**
@@ -456,7 +526,7 @@ function pressEnter(input: Element): void {
  *   - ChatGPT 深度思考的「思考→作答空档」里回答仍为空（无活动），待作答开始（长度 0→N 或停止键重现）才算恢复。
  * 因此：停止键消失后，只有当它持续不再出现、且回答两路活动信号都静默满 GAP_GRACE_MS，才判完成。
  */
-async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
+async function awaitCompletion(adapter: SiteAdapter, hooks: RunHooks): Promise<void> {
   const { stopButton, assistantMessage } = adapter.selectors;
   const { idleMutationMs, maxWaitMs, stopButtonIconPrefix } = adapter.completion;
   const deadline = Date.now() + maxWaitMs;
@@ -510,15 +580,32 @@ async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
     //（出现新的答案元素 / 文本长度超过基线），才算本轮生成已开始。
     const baselineEl = lastAnswerEl();
     const baselineLen = answerLen();
-    const started = await waitFor(
-      () => isStopVisible() || lastAnswerEl() !== baselineEl || answerLen() > baselineLen,
-      25000,
-    );
+    const startDeadline = Date.now() + 25000;
+    let started = false;
+    while (Date.now() < startDeadline) {
+      if (detectCaptcha(adapter)) {
+        await waitForCaptchaResolved(adapter, hooks);
+        throw new AdapterError('验证码已处理，需要重新发送本轮问题', 'captcha');
+      }
+      if (isStopVisible() || lastAnswerEl() !== baselineEl || answerLen() > baselineLen) {
+        started = true;
+        break;
+      }
+      await delay(300);
+    }
     if (started) {
      try {
       while (Date.now() < deadline) {
+        if (detectCaptcha(adapter)) {
+          await waitForCaptchaResolved(adapter, hooks);
+          throw new AdapterError('验证码已处理，需要重新发送本轮问题', 'captcha');
+        }
         // 等停止键消失。
-        const gone = await waitFor(() => !isStopVisible(), deadline - Date.now());
+        const gone = await waitFor(() => detectCaptcha(adapter) || !isStopVisible(), deadline - Date.now());
+        if (detectCaptcha(adapter)) {
+          await waitForCaptchaResolved(adapter, hooks);
+          throw new AdapterError('验证码已处理，需要重新发送本轮问题', 'captcha');
+        }
         if (!gone) throw new AdapterError('生成超时（stop 按钮未消失）', 'timeout');
         // 停止键消失 ≠ 一定完成：可能是「思考→作答」空档，或作答中按钮重渲染的短暂消失，或停止键提前转回发送键（千问）。
         // 真完成判据：停止键持续不再出现，且「回答活动」静默满 GAP_GRACE_MS。
@@ -530,6 +617,10 @@ async function awaitCompletion(adapter: SiteAdapter): Promise<void> {
         for (;;) {
           if (Date.now() > deadline) throw new AdapterError('生成超时', 'timeout');
           await delay(GRACE_POLL_MS);
+          if (detectCaptcha(adapter)) {
+            await waitForCaptchaResolved(adapter, hooks);
+            throw new AdapterError('验证码已处理，需要重新发送本轮问题', 'captcha');
+          }
           if (isStopVisible()) { resumed = true; break; } // 停止键回来了 → 作答阶段/闪烁恢复，回外层重等
           ensureObserver();
           const len = answerLen();
